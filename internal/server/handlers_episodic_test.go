@@ -8,8 +8,10 @@ import (
 
 	"github.com/drakejin/memory-mcp/internal/episodic"
 	"github.com/drakejin/memory-mcp/internal/hotstore"
+	"github.com/drakejin/memory-mcp/internal/knowledge"
 	"github.com/drakejin/memory-mcp/internal/rehydrate"
 	"github.com/drakejin/memory-mcp/internal/search"
+	"github.com/drakejin/memory-mcp/internal/server/apierr"
 	"github.com/drakejin/memory-mcp/internal/ulid"
 )
 
@@ -123,8 +125,8 @@ func TestCreateEpisodeValidation(t *testing.T) {
 			if tc.status == http.StatusCreated && !env.Success {
 				t.Fatalf("success envelope expected, got %+v", env)
 			}
-			if tc.status != http.StatusCreated && env.Error == "" {
-				t.Fatal("failure envelope must carry an error message")
+			if tc.status != http.StatusCreated && (env.Error == nil || env.Error.Message == "" || env.Error.Code == "") {
+				t.Fatalf("failure envelope must carry a code and a message, got %+v", env.Error)
 			}
 		})
 	}
@@ -132,7 +134,11 @@ func TestCreateEpisodeValidation(t *testing.T) {
 
 func TestCreateEpisodeAssignsServerControlledFields(t *testing.T) {
 	store := newFakeStore()
-	_, h := newTestServer(t, func(d *Deps) { d.Store = store })
+	ids := &fakeIDs{}
+	_, h := newTestServer(t, func(d *Config) {
+		d.Store = store
+		d.IDs = ids
+	})
 
 	// consolidated must never be settable by the caller, and the id/occurred_at
 	// defaults come from the server clock.
@@ -147,8 +153,13 @@ func TestCreateEpisodeAssignsServerControlledFields(t *testing.T) {
 	if got.Record.Consolidated {
 		t.Error("consolidated must always start false (§3: server never auto-sets it)")
 	}
-	if !ulid.IsULID(got.Record.ID) {
+	if !ulid.Valid(got.Record.ID) {
 		t.Errorf("id = %q, want a ULID", got.Record.ID)
+	}
+	// The id's time half must come from the injected clock, never the wall
+	// clock — otherwise nothing about a stored record is reproducible.
+	if ids.lastMillis != fixedNow.UnixMilli() {
+		t.Errorf("id minted at %d, want the injected clock %d", ids.lastMillis, fixedNow.UnixMilli())
 	}
 	if !got.Record.OccurredAt.Equal(fixedNow) {
 		t.Errorf("occurred_at = %v, want clock now %v", got.Record.OccurredAt, fixedNow)
@@ -158,6 +169,41 @@ func TestCreateEpisodeAssignsServerControlledFields(t *testing.T) {
 	}
 	if len(store.episodes[testKey.String()]) != 1 {
 		t.Fatalf("hot store holds %d records, want 1", len(store.episodes[testKey.String()]))
+	}
+}
+
+// TestCreateRejectsWhenIDGenerationFails pins the one branch that must not
+// half-succeed: no id means nothing may be written to hot.
+func TestCreateRejectsWhenIDGenerationFails(t *testing.T) {
+	tests := []struct {
+		name   string
+		target string
+		body   any
+	}{
+		{
+			name:   "episode",
+			target: episodesPath,
+			body:   CreateEpisodeRequest{Kind: episodic.KindEvent, Actor: episodic.ActorAgent, Text: "t"},
+		},
+		{
+			name:   "knowledge node",
+			target: "/v1/ws/team/proj/knowledge/nodes",
+			body:   CreateNodeRequest{Kind: knowledge.KindFact, Name: "n", Trust: knowledge.TrustUserStated},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			store := newFakeStore()
+			_, h := newTestServer(t, func(d *Config) {
+				d.Store = store
+				d.IDs = &fakeIDs{err: errBoom}
+			})
+			rec := do(t, h, http.MethodPost, tc.target, tc.body)
+			assertStatus(t, rec, http.StatusInternalServerError)
+			if len(store.episodes[testKey.String()]) != 0 || len(store.graphs[testKey.String()].Nodes) != 0 {
+				t.Fatal("an unidentified record must never reach the hot store")
+			}
+		})
 	}
 }
 
@@ -178,19 +224,19 @@ func TestCreateEpisodeExplicitOccurredAtIsPreserved(t *testing.T) {
 func TestCreateEpisodeDegradedWhenIndexDown(t *testing.T) {
 	tests := []struct {
 		name     string
-		mutate   func(*Deps)
+		mutate   func(*Config)
 		wantNote string
 	}{
 		{
 			name:     "index not configured",
-			mutate:   func(d *Deps) { d.Index = nil },
+			mutate:   func(d *Config) { d.Index = nil },
 			wantNote: degradedSearch,
 		},
 		{
 			name: "index upsert fails",
-			mutate: func(d *Deps) {
+			mutate: func(d *Config) {
 				idx := newFakeIndex()
-				idx.indexErr = search.ErrUnavailable
+				idx.indexErr = errIndexDown
 				d.Index = idx
 			},
 			wantNote: degradedSearch,
@@ -200,7 +246,7 @@ func TestCreateEpisodeDegradedWhenIndexDown(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			store := newFakeStore()
-			_, h := newTestServer(t, func(d *Deps) {
+			_, h := newTestServer(t, func(d *Config) {
 				d.Store = store
 				tc.mutate(d)
 			})
@@ -219,7 +265,7 @@ func TestCreateEpisodeDegradedWhenIndexDown(t *testing.T) {
 			if len(store.episodes[testKey.String()]) != 1 {
 				t.Fatal("hot store must hold the record even when the index is down")
 			}
-			wantDirty := rehydrate.FileKey(hotstore.PlaneEpisodic, testKey)
+			wantDirty := hotstore.ManifestFileKey(hotstore.PlaneEpisodic, testKey)
 			if len(store.dirtyMarks) != 1 || store.dirtyMarks[0] != wantDirty {
 				t.Fatalf("dirty marks = %v, want [%s]", store.dirtyMarks, wantDirty)
 			}
@@ -229,10 +275,10 @@ func TestCreateEpisodeDegradedWhenIndexDown(t *testing.T) {
 
 func TestCreateEpisodeIndexSuccessClearsDirty(t *testing.T) {
 	store := newFakeStore()
-	fk := rehydrate.FileKey(hotstore.PlaneEpisodic, testKey)
+	fk := hotstore.ManifestFileKey(hotstore.PlaneEpisodic, testKey)
 	store.manifest.Files[fk] = hotstore.FileState{SHA256: "abc", RecordCount: 1, Dirty: true}
 	index := newFakeIndex()
-	_, h := newTestServer(t, func(d *Deps) {
+	_, h := newTestServer(t, func(d *Config) {
 		d.Store = store
 		d.Index = index
 	})
@@ -248,7 +294,7 @@ func TestCreateEpisodeIndexSuccessClearsDirty(t *testing.T) {
 	if !store.manifest.Files[fk].IndexedAt.Equal(fixedNow) {
 		t.Errorf("indexed_at = %v, want %v", store.manifest.Files[fk].IndexedAt, fixedNow)
 	}
-	if got := store.manifest.Indexes[rehydrate.IndexKeyEpisodic].LastHydratedSHA; got == "" {
+	if got := store.manifest.Indexes[rehydrate.IndexKeyFor(hotstore.PlaneEpisodic)].LastHydratedSHA; got == "" {
 		t.Error("plane hydration sha must be recorded after a successful upsert")
 	}
 	if len(index.indexed[testKey.String()]) != 1 {
@@ -259,7 +305,7 @@ func TestCreateEpisodeIndexSuccessClearsDirty(t *testing.T) {
 func TestCreateEpisodeHotWriteFailureIs500(t *testing.T) {
 	store := newFakeStore()
 	store.appendErr = errBoom
-	_, h := newTestServer(t, func(d *Deps) { d.Store = store })
+	_, h := newTestServer(t, func(d *Config) { d.Store = store })
 
 	rec := do(t, h, http.MethodPost, episodesPath, CreateEpisodeRequest{
 		Kind: episodic.KindEvent, Actor: episodic.ActorAgent, Text: "t",
@@ -272,7 +318,7 @@ func TestCreateEpisodeHotWriteFailureIs500(t *testing.T) {
 }
 
 func TestCreateEpisodeWithoutHotStoreIs503(t *testing.T) {
-	_, h := newTestServer(t, func(d *Deps) { d.Store = nil })
+	_, h := newTestServer(t, func(d *Config) { d.Store = nil })
 	rec := do(t, h, http.MethodPost, episodesPath, CreateEpisodeRequest{
 		Kind: episodic.KindEvent, Actor: episodic.ActorAgent, Text: "t",
 	})
@@ -306,12 +352,12 @@ func TestSearchEpisodesQueryValidation(t *testing.T) {
 func TestSearchEpisodesReturns503WhenIndexUnavailable(t *testing.T) {
 	tests := []struct {
 		name   string
-		mutate func(*Deps)
+		mutate func(*Config)
 	}{
-		{"index not configured", func(d *Deps) { d.Index = nil }},
-		{"index unreachable", func(d *Deps) {
+		{"index not configured", func(d *Config) { d.Index = nil }},
+		{"index unreachable", func(d *Config) {
 			idx := newFakeIndex()
-			idx.searchErr = search.ErrUnavailable
+			idx.searchErr = errIndexDown
 			d.Index = idx
 		}},
 	}
@@ -322,8 +368,11 @@ func TestSearchEpisodesReturns503WhenIndexUnavailable(t *testing.T) {
 			// §5: reads on a dead derived store are honest 503s, not empty 200s.
 			assertStatus(t, rec, http.StatusServiceUnavailable)
 			env := decodeEnvelope(t, rec, nil)
-			if env.Error != degradedSearch {
-				t.Fatalf("error = %q, want %q", env.Error, degradedSearch)
+			if env.Error == nil || env.Error.Message != degradedSearch {
+				t.Fatalf("error = %+v, want message %q", env.Error, degradedSearch)
+			}
+			if env.Error.Code != apierr.CodeUnavailable {
+				t.Fatalf("error code = %q, want %q", env.Error.Code, apierr.CodeUnavailable)
 			}
 		})
 	}
@@ -341,7 +390,7 @@ func TestSearchEpisodesRunsStatGateAndBumpsRecall(t *testing.T) {
 		Excerpt: "…<em>보안</em>…",
 	}}
 	reh := &fakeRehydrator{}
-	_, h := newTestServer(t, func(d *Deps) {
+	_, h := newTestServer(t, func(d *Config) {
 		d.Store = store
 		d.Index = index
 		d.Rehydrator = reh
@@ -422,7 +471,7 @@ func TestSearchEpisodesConvergesIndexAfterRecallBump(t *testing.T) {
 			// indexed[] holds exactly what converging produced.
 			index.indexed = map[string][]episodic.Record{}
 
-			_, h := newTestServer(t, func(d *Deps) {
+			_, h := newTestServer(t, func(d *Config) {
 				d.Store = store
 				d.Index = index
 			})
@@ -440,7 +489,7 @@ func TestSearchEpisodesConvergesIndexAfterRecallBump(t *testing.T) {
 				t.Errorf("re-indexed ids = %v, want %v", gotIDs, tc.wantIndexedIDs)
 			}
 
-			fk := rehydrate.FileKey(hotstore.PlaneEpisodic, testKey)
+			fk := hotstore.ManifestFileKey(hotstore.PlaneEpisodic, testKey)
 			if gotDirty := store.manifest.Files[fk].Dirty; gotDirty != tc.wantDirty {
 				t.Errorf("manifest dirty = %v, want %v", gotDirty, tc.wantDirty)
 			}
@@ -448,7 +497,7 @@ func TestSearchEpisodesConvergesIndexAfterRecallBump(t *testing.T) {
 				return
 			}
 			want := rehydrate.PlaneStateSHA(store.manifest, hotstore.PlaneEpisodic)
-			if got := store.manifest.Indexes[rehydrate.IndexKeyEpisodic].LastHydratedSHA; got != want {
+			if got := store.manifest.Indexes[rehydrate.IndexKeyFor(hotstore.PlaneEpisodic)].LastHydratedSHA; got != want {
 				t.Errorf("hydration sha = %q, want %q — CheckDrift would report permanent drift", got, want)
 			}
 		})
@@ -460,7 +509,7 @@ func TestSearchEpisodesRecallBumpFailureDoesNotFailRequest(t *testing.T) {
 	store.updateEpiErr = errBoom
 	index := newFakeIndex()
 	index.hits = []search.Hit{{Record: episodic.Record{ID: ulidA}}}
-	_, h := newTestServer(t, func(d *Deps) {
+	_, h := newTestServer(t, func(d *Config) {
 		d.Store = store
 		d.Index = index
 	})
@@ -470,7 +519,7 @@ func TestSearchEpisodesRecallBumpFailureDoesNotFailRequest(t *testing.T) {
 
 func TestSearchEpisodesEmptyResultIsEmptyArray(t *testing.T) {
 	store := newFakeStore()
-	_, h := newTestServer(t, func(d *Deps) { d.Store = store })
+	_, h := newTestServer(t, func(d *Config) { d.Store = store })
 	rec := do(t, h, http.MethodGet, "/v1/ws/team/proj/episodes/search?q=a", nil)
 	assertStatus(t, rec, http.StatusOK)
 	// A nil slice would serialize as null; clients get [] instead.
@@ -486,7 +535,7 @@ func TestSearchEpisodesEmptyResultIsEmptyArray(t *testing.T) {
 func TestSearchEpisodesInternalErrorIs500(t *testing.T) {
 	index := newFakeIndex()
 	index.searchErr = errBoom
-	_, h := newTestServer(t, func(d *Deps) { d.Index = index })
+	_, h := newTestServer(t, func(d *Config) { d.Index = index })
 	rec := do(t, h, http.MethodGet, "/v1/ws/team/proj/episodes/search?q=a", nil)
 	assertStatus(t, rec, http.StatusInternalServerError)
 }
@@ -498,14 +547,14 @@ func TestGetEpisodeHotThenColdFallback(t *testing.T) {
 	tests := []struct {
 		name     string
 		id       string
-		mutate   func(*Deps)
+		mutate   func(*Config)
 		status   int
 		wantText string
 	}{
 		{
 			name: "hot hit",
 			id:   ulidA,
-			mutate: func(d *Deps) {
+			mutate: func(d *Config) {
 				st := newFakeStore()
 				st.episodes[testKey.String()] = []episodic.Record{hotRec}
 				d.Store = st
@@ -516,7 +565,7 @@ func TestGetEpisodeHotThenColdFallback(t *testing.T) {
 		{
 			name: "cold fallback keeps provenance resolvable",
 			id:   ulidB,
-			mutate: func(d *Deps) {
+			mutate: func(d *Config) {
 				ar := newFakeArchiver()
 				ar.archived[ulidB] = coldRec
 				d.Archiver = ar
@@ -533,13 +582,13 @@ func TestGetEpisodeHotThenColdFallback(t *testing.T) {
 		{
 			name:   "no archiver configured",
 			id:     ulidC,
-			mutate: func(d *Deps) { d.Archiver = nil },
+			mutate: func(d *Config) { d.Archiver = nil },
 			status: http.StatusNotFound,
 		},
 		{
 			name: "archive lookup error",
 			id:   ulidC,
-			mutate: func(d *Deps) {
+			mutate: func(d *Config) {
 				ar := newFakeArchiver()
 				ar.fetchErr = errBoom
 				d.Archiver = ar
@@ -549,7 +598,7 @@ func TestGetEpisodeHotThenColdFallback(t *testing.T) {
 		{
 			name: "hot lookup error",
 			id:   ulidA,
-			mutate: func(d *Deps) {
+			mutate: func(d *Config) {
 				st := newFakeStore()
 				st.getErr = errBoom
 				d.Store = st

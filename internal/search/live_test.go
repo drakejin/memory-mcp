@@ -1,17 +1,19 @@
 package search
 
 // Opt-in integration test against a live OpenSearch container (with the
-// analysis-nori plugin, deploy/docker-compose.yml). Guarded by DJ_TEST_LIVE=1
-// so `make test` stays container-free:
+// analysis-nori plugin, deploy/docker-compose.yml). Guarded by
+// DJ_MEMORY_LIVE_TEST=1 — the single project-wide live gate, shared with
+// internal/graph and internal/cold — so `make test` stays container-free:
 //
-//	docker compose -f deploy/docker-compose.yml up -d opensearch
-//	DJ_TEST_LIVE=1 go test ./internal/search/ -run TestLive -v
+//	make live
+//	# or: DJ_MEMORY_LIVE_TEST=1 go test ./internal/search/ -run TestLive -v
 //
 // It writes to a dedicated scratch index and drops it afterwards; the
 // production index dj-memory-episodic is never touched.
 
 import (
 	"context"
+	"log/slog"
 	"os"
 	"strings"
 	"testing"
@@ -23,20 +25,30 @@ import (
 
 const liveIndexName = "dj-memory-episodic-livetest"
 
-func newLiveClient(t *testing.T) *Client {
+// liveEnvVar is the one opt-in gate for every live test in this repo; the same
+// name and the same exact-"1" comparison appear in internal/graph and
+// internal/cold, and `make live` sets it (code-standards §3: no magic strings,
+// one uniform pattern).
+const (
+	liveEnvVar   = "DJ_MEMORY_LIVE_TEST"
+	liveEnvValue = "1"
+)
+
+func newLiveClient(t *testing.T) *client {
 	t.Helper()
-	if os.Getenv("DJ_TEST_LIVE") != "1" {
-		t.Skip("live OpenSearch test skipped; set DJ_TEST_LIVE=1 to run")
+	if os.Getenv(liveEnvVar) != liveEnvValue {
+		t.Skip("live OpenSearch test: set " + liveEnvVar + "=" + liveEnvValue + " with the compose opensearch container running (make live)")
 	}
 	url := os.Getenv("DJ_MEMORY_OPENSEARCH_URL")
 	if url == "" {
 		url = "http://127.0.0.1:9200"
 	}
-	c, err := NewClient(url)
+	// newClient, not New: the scratch index is a test concern, so it never
+	// becomes a production Config knob.
+	c, err := newClient(Config{URL: url, Logger: slog.New(slog.DiscardHandler)}, liveIndexName)
 	if err != nil {
-		t.Fatalf("NewClient(%s): %v", url, err)
+		t.Fatalf("newClient(%s): %v", url, err)
 	}
-	c.index = liveIndexName
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := c.Ping(ctx); err != nil {

@@ -29,7 +29,7 @@ const (
 	fact3Body = "보안 플러그인은 환경 변수 DISABLE_SECURITY_PLUGIN=true 로 끈다"
 )
 
-// pdfFixtureLines feed makeMinimalPDF for scenario 4; pdfQueryToken is the
+// pdfFixtureLines feed pdffixture.Minimal for scenario 4; pdfQueryToken is the
 // unique chunk-search token.
 var pdfFixtureLines = []string{
 	"memory-mcp blackbox acceptance fixture seoulnine",

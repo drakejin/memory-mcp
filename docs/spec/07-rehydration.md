@@ -216,6 +216,7 @@ type Report struct {
 | 전체 경로 선행 작업 | `index.Drop(ctx)` — 인덱스 통째 삭제 | `graph.Clear(ctx)` — `MATCH (n:KnowledgeNode) DETACH DELETE n` |
 | 스키마 보장 | `index.EnsureIndex(ctx)` (nori 매핑) | `Client.ensureSchema`가 upsert 직전 lazy 실행 |
 | 재적재 | 프로젝트별 `ListEpisodes` → `IndexRecords` | 프로젝트별 `ReadKnowledge` → `UpsertNodes` → `UpsertEdges` |
+| 부분 경로 선행 작업 | `index.DeleteProject(key)` — 프로젝트 범위 `_delete_by_query` | `graph.DeleteMissing(key, keep)` — 프로젝트 범위 `DETACH DELETE` (§5.1) |
 | 멱등성 원천 | 인덱스를 버리므로 자명 | `MERGE (k:KnowledgeNode {id, ws, team, proj})` + 전 속성 `SET` |
 | verify 감사 | `DocCount(p) == len(recs)` | `NodeCount(p) == len(g.Nodes)` |
 | 실패 격리 | `Drop` 실패는 **비치명**(첫 수화 전 인덱스 부재가 정상) — Failures에만 기록하고 계속. `EnsureIndex` 실패는 평면 포기 | `Clear` 실패는 `full=false`로 표시하되 replay는 계속 |
@@ -224,7 +225,15 @@ type Report struct {
 
 `MERGE`만으로는 **추가·수정**밖에 못 한다. hot에서 사라진 노드(purge 등)는 replay를 몇 번 돌려도 Neo4j에 남고, 그러면 `CheckDrift`가 `graph nodes N != hot nodes M`을 영원히 보고하며 어떤 재수화도 그것을 지울 수 없다. 그래서 **전체 경로(`RehydrateAll`)만** `Clear` 후 replay한다 — 코드 주석이 이 논리를 그대로 담고 있다.
 
-`RehydrateProject`(부분 경로)는 `Drop`도 `Clear`도 호출하지 않는다. 한 프로젝트를 수렴시키려고 다른 프로젝트의 파생 데이터를 지울 수는 없기 때문이다. episodic도 부분 경로에서는 `EnsureIndex` + `IndexRecords`만 한다.
+`RehydrateProject`(부분 경로)는 `Drop`도 `Clear`도 호출하지 않는다. 한 프로젝트를 수렴시키려고 다른 프로젝트의 파생 데이터를 지울 수는 없기 때문이다. 대신 **프로젝트 범위로 좁힌 삭제**를 쓴다.
+
+| | episodic | knowledge |
+|---|---|---|
+| 삭제 | `Index.DeleteProject(key)` — `_delete_by_query`가 `workspace/team/project` 필터에만 걸린다. hot 레코드가 0건이어도 호출한다(전부 에이징된 상태가 바로 색인이 통째로 낡은 상태다) | `Graph.DeleteMissing(key, keep)` — `MATCH (n {ws,team,proj}) WHERE NOT n.id IN $keep DETACH DELETE n` |
+| 순서 | 삭제 → `IndexRecords` (전체 경로의 drop → bulk와 같은 모양) | upsert → 삭제 (중간 실패 시 데이터가 모자라는 쪽이 아니라 남는 쪽으로 기운다) |
+| 없으면 생기는 일 | cold로 내려간 episode가 영원히 검색된다 — `commitManifest`가 dirty를 지워버려 그것을 고칠 신호마저 사라진다 | Neo4j 삭제가 실패한 purge 노드가 모든 replay를 살아남아 파생물에만 존재하는 콘텐츠가 된다(§0 원칙 1 위반) |
+
+삭제가 실패하면 `ok[key]`를 세우지 않으므로 `touchFile`이 돌지 않고 **dirty가 그대로 남는다** — 수렴하지 못한 평면이 깨끗하다고 기록되는 일은 없다.
 
 ### 5.2 수렴 후 manifest 커밋
 

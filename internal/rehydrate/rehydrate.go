@@ -2,21 +2,96 @@
 // (architecture-v2.md §5). Containers run without volumes and may die at any
 // time; truth is decided by comparing manifest hashes/counts against live
 // index state. Episodic rehydration drops and bulk-rebuilds; knowledge
-// rehydration replays idempotent MERGEs.
+// rehydration clears and replays idempotent MERGEs.
+//
+// Dependencies are narrow consumer-side interfaces satisfied structurally by
+// hotstore, search and graph (code-standards §1.1). Errors crossing the
+// package boundary are *errs.Error: an unreachable derived store is
+// KindUnavailable, which is what the degraded-mode decision reads (§2.1).
 package rehydrate
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/drakejin/memory-mcp/internal/graph"
+	"github.com/drakejin/memory-mcp/internal/episodic"
+	"github.com/drakejin/memory-mcp/internal/errs"
 	"github.com/drakejin/memory-mcp/internal/hotstore"
-	"github.com/drakejin/memory-mcp/internal/search"
+	"github.com/drakejin/memory-mcp/internal/knowledge"
 )
+
+// Ops carried by this package's errors (code-standards §2.1).
+const (
+	opNew              = "rehydrate.New"
+	opValidateConfig   = "rehydrate.Config.Validate"
+	opCheckDrift       = "rehydrate.CheckDrift"
+	opRehydrateAll     = "rehydrate.RehydrateAll"
+	opRehydrateProject = "rehydrate.RehydrateProject"
+	opStatGate         = "rehydrate.StatGate"
+	opHotNodeCount     = "rehydrate.hotNodeCount"
+)
+
+// entityConfig is the entity addressed by construction errors.
+const entityConfig = "config"
+
+// Drift reasons reported to /status. They are the honesty contract of §0
+// principle 3, so they are declared once instead of formatted inline.
+const (
+	reasonIndexNotConfigured = "opensearch not configured"
+	reasonIndexUnreachable   = "opensearch unreachable"
+	reasonIndexAbsent        = "episodic index absent or uncountable"
+	reasonEpisodicChanged    = "episodic hot content changed since last hydration"
+	reasonGraphNotConfigured = "neo4j not configured"
+	reasonGraphUnreachable   = "neo4j unreachable"
+	reasonGraphUncountable   = "knowledge graph uncountable"
+	reasonKnowledgeChanged   = "knowledge hot content changed since last hydration"
+	reasonHotUnreadable      = "hot knowledge unreadable: "
+)
+
+// HotStore is the canonical-store surface rehydration consumes.
+type HotStore interface {
+	ListProjects(ctx context.Context) ([]hotstore.ProjectKey, error)
+	ListEpisodes(ctx context.Context, key hotstore.ProjectKey) ([]episodic.Record, error)
+	ReadKnowledge(ctx context.Context, key hotstore.ProjectKey) (knowledge.Graph, error)
+	Manifest(ctx context.Context) (hotstore.Manifest, error)
+	UpdateManifest(ctx context.Context, fn func(hotstore.Manifest) (hotstore.Manifest, error)) error
+	FileInfo(ctx context.Context, key hotstore.ProjectKey, plane hotstore.Plane) (int64, time.Time, error)
+}
+
+// EpisodeIndex is the derived episodic index: drop, rebuild, count.
+// DeleteProject is the project-scoped drop the partial path needs, so that one
+// project can converge its removals without discarding the others.
+type EpisodeIndex interface {
+	Ping(ctx context.Context) error
+	EnsureIndex(ctx context.Context) error
+	IndexRecords(ctx context.Context, key hotstore.ProjectKey, recs []episodic.Record) error
+	DeleteProject(ctx context.Context, key hotstore.ProjectKey) error
+	DocCount(ctx context.Context, key hotstore.ProjectKey) (int, error)
+	Drop(ctx context.Context) error
+}
+
+// KnowledgeGraph is the derived knowledge graph: clear, MERGE replay, count.
+// DeleteMissing is the project-scoped counterpart of Clear, for the same reason
+// EpisodeIndex needs DeleteProject.
+type KnowledgeGraph interface {
+	Ping(ctx context.Context) error
+	UpsertNodes(ctx context.Context, key hotstore.ProjectKey, nodes []knowledge.Node) error
+	UpsertEdges(ctx context.Context, key hotstore.ProjectKey, edges []knowledge.Edge) error
+	DeleteMissing(ctx context.Context, key hotstore.ProjectKey, keep []string) error
+	NodeCount(ctx context.Context, key hotstore.ProjectKey) (int, error)
+	Clear(ctx context.Context) error
+}
+
+// Clock is the injected time source; the stat-gate debounce and manifest
+// stamps must stay deterministic in tests (code-standards §1.1).
+type Clock interface {
+	Now() time.Time
+}
 
 // Drift describes one derived store's divergence from the manifest.
 type Drift struct {
@@ -48,80 +123,119 @@ type Report struct {
 	Failures []string `json:"failures"`
 }
 
-// Rehydrator is the contract for startup checks, the request-time stat-gate,
-// and POST /v1/reindex.
-type Rehydrator interface {
+// Service is the contract for startup checks, the request-time stat-gate, and
+// POST /v1/reindex.
+type Service interface {
 	// CheckDrift compares OpenSearch index existence/doc-count and Neo4j
 	// node-count against the manifest without mutating anything.
 	CheckDrift(ctx context.Context) (DriftReport, error)
 	// RehydrateAll rebuilds both derived stores from hot JSON (episodic:
-	// drop+bulk; knowledge: MERGE replay). verify additionally audits every
-	// record hash. Clears manifest dirty flags on success.
+	// drop+bulk; knowledge: clear+MERGE replay). verify additionally audits
+	// every record count. Clears manifest dirty flags on success.
 	RehydrateAll(ctx context.Context, verify bool) (Report, error)
 	// RehydrateProject converges one project only — the request-time partial
-	// path taken when the stat-gate (2s debounce) sees dirty marks or mtime
-	// changes (§5).
+	// path taken when the stat-gate sees dirty marks or mtime changes (§5).
 	RehydrateProject(ctx context.Context, key hotstore.ProjectKey) (Report, error)
 	// StatGate runs the debounced freshness check for a project and triggers
 	// RehydrateProject when needed. Cheap: file mtime + manifest age only.
 	StatGate(ctx context.Context, key hotstore.ProjectKey) error
 }
 
-// Runner is the concrete Rehydrator.
-type Runner struct {
-	store hotstore.Store
-	index search.Index
-	graph graph.Store
-	clock hotstore.Clock
+// Config is the single construction input.
+type Config struct {
+	// Store is the canonical hot store, the source of truth every replay
+	// reads from. Required.
+	Store HotStore
+	// Index is the derived episodic index. Nil means OpenSearch was never
+	// configured: every method then reports that plane unavailable instead of
+	// failing (§5 degraded semantics).
+	Index EpisodeIndex
+	// Graph is the derived knowledge graph; nil behaves like Index.
+	Graph KnowledgeGraph
+	// Clock stamps manifest freshness and drives the stat-gate debounce.
+	// Required.
+	Clock Clock
+	// Logger receives best-effort failures. Nil discards them; the Report
+	// still carries every failure.
+	Logger *slog.Logger
+}
 
-	// mu guards lastGate, the per-project debounce timestamps for StatGate.
+// Validate reports whether the config can produce a usable service.
+func (c Config) Validate() error {
+	if c.Store == nil {
+		return errs.Invalid(opValidateConfig, entityConfig, "store must be set")
+	}
+	if c.Clock == nil {
+		return errs.Invalid(opValidateConfig, entityConfig, "clock must be set")
+	}
+	return nil
+}
+
+// service is the concrete Service.
+type service struct {
+	store HotStore
+	index EpisodeIndex
+	graph KnowledgeGraph
+	clock Clock
+	log   *slog.Logger
+
+	// mu guards lastGate. Invariant: at most one stat-gate pass per project
+	// per debounceInterval, so a burst of requests cannot stampede the
+	// derived stores with concurrent rehydrations.
 	mu       sync.Mutex
 	lastGate map[string]time.Time
 }
 
 // Compile-time contract check.
-var _ Rehydrator = (*Runner)(nil)
+var _ Service = (*service)(nil)
 
-// New wires a Runner. index and gr may be nil when the backing service failed
-// to initialize; every method then reports that plane as unavailable instead
-// of panicking (§5 degraded semantics).
-func New(store hotstore.Store, index search.Index, gr graph.Store, clock hotstore.Clock) *Runner {
-	return &Runner{
-		store:    store,
-		index:    index,
-		graph:    gr,
-		clock:    clock,
-		lastGate: make(map[string]time.Time),
+// New returns a Service bound to cfg. It performs no I/O; reachability is
+// probed by CheckDrift.
+func New(cfg Config) (Service, error) {
+	if err := cfg.Validate(); err != nil {
+		return nil, errs.Wrap(opNew, err)
 	}
+	log := cfg.Logger
+	if log == nil {
+		log = slog.New(slog.DiscardHandler)
+	}
+	return &service{
+		store:    cfg.Store,
+		index:    cfg.Index,
+		graph:    cfg.Graph,
+		clock:    cfg.Clock,
+		log:      log,
+		lastGate: make(map[string]time.Time),
+	}, nil
 }
 
-// CheckDrift implements Rehydrator.
-func (r *Runner) CheckDrift(ctx context.Context) (DriftReport, error) {
-	m, err := r.store.Manifest(ctx)
+// CheckDrift implements Service.
+func (s *service) CheckDrift(ctx context.Context) (DriftReport, error) {
+	m, err := s.store.Manifest(ctx)
 	if err != nil {
-		return DriftReport{}, fmt.Errorf("rehydrate: read manifest: %w", err)
+		return DriftReport{}, errs.Wrap(opCheckDrift, err)
 	}
 	return DriftReport{
-		Episodic:  r.episodicDrift(ctx, m),
-		Knowledge: r.knowledgeDrift(ctx, m),
+		Episodic:  s.episodicDrift(ctx, m),
+		Knowledge: s.knowledgeDrift(ctx, m),
 	}, nil
 }
 
 // episodicDrift compares manifest record counts (and dirty flags / hydration
 // sha) against the live OpenSearch doc count.
-func (r *Runner) episodicDrift(ctx context.Context, m hotstore.Manifest) Drift {
-	if r.index == nil {
-		return Drift{Unavailable: true, Reason: "opensearch not configured"}
+func (s *service) episodicDrift(ctx context.Context, m hotstore.Manifest) Drift {
+	if s.index == nil {
+		return Drift{Unavailable: true, Reason: reasonIndexNotConfigured}
 	}
-	if err := r.index.Ping(ctx); err != nil {
-		return Drift{Unavailable: true, Reason: "opensearch unreachable"}
+	if err := s.index.Ping(ctx); err != nil {
+		return Drift{Unavailable: true, Reason: reasonIndexUnreachable}
 	}
 	want, dirty := planeTotals(m, hotstore.PlaneEpisodic)
-	got, err := r.index.DocCount(ctx, hotstore.ProjectKey{})
+	got, err := s.index.DocCount(ctx, hotstore.ProjectKey{})
 	if err != nil {
 		// Reachable but uncountable — the index itself is absent (fresh
 		// container) and must be rebuilt.
-		return Drift{Detected: true, Reason: "episodic index absent or uncountable"}
+		return Drift{Detected: true, Reason: reasonIndexAbsent}
 	}
 	switch {
 	case got != want:
@@ -129,9 +243,8 @@ func (r *Runner) episodicDrift(ctx context.Context, m hotstore.Manifest) Drift {
 	case dirty > 0:
 		return Drift{Detected: true, Reason: fmt.Sprintf("%d dirty episodic file(s) await rehydration", dirty)}
 	}
-	if st, ok := m.Indexes[IndexKeyEpisodic]; ok && st.LastHydratedSHA != "" &&
-		st.LastHydratedSHA != PlaneStateSHA(m, hotstore.PlaneEpisodic) {
-		return Drift{Detected: true, Reason: "episodic hot content changed since last hydration"}
+	if planeHydrationStale(m, hotstore.PlaneEpisodic) {
+		return Drift{Detected: true, Reason: reasonEpisodicChanged}
 	}
 	return Drift{}
 }
@@ -139,20 +252,20 @@ func (r *Runner) episodicDrift(ctx context.Context, m hotstore.Manifest) Drift {
 // knowledgeDrift compares actual hot node counts against the live Neo4j node
 // count. Counting from the hot files (not the manifest) keeps this check
 // independent of how the hotstore accounts knowledge records.
-func (r *Runner) knowledgeDrift(ctx context.Context, m hotstore.Manifest) Drift {
-	if r.graph == nil {
-		return Drift{Unavailable: true, Reason: "neo4j not configured"}
+func (s *service) knowledgeDrift(ctx context.Context, m hotstore.Manifest) Drift {
+	if s.graph == nil {
+		return Drift{Unavailable: true, Reason: reasonGraphNotConfigured}
 	}
-	if err := r.graph.Ping(ctx); err != nil {
-		return Drift{Unavailable: true, Reason: "neo4j unreachable"}
+	if err := s.graph.Ping(ctx); err != nil {
+		return Drift{Unavailable: true, Reason: reasonGraphUnreachable}
 	}
-	want, err := r.hotNodeCount(ctx)
+	want, err := s.hotNodeCount(ctx)
 	if err != nil {
-		return Drift{Detected: true, Reason: "hot knowledge unreadable: " + err.Error()}
+		return Drift{Detected: true, Reason: reasonHotUnreadable + err.Error()}
 	}
-	got, err := r.graph.NodeCount(ctx, hotstore.ProjectKey{})
+	got, err := s.graph.NodeCount(ctx, hotstore.ProjectKey{})
 	if err != nil {
-		return Drift{Detected: true, Reason: "knowledge graph uncountable"}
+		return Drift{Detected: true, Reason: reasonGraphUncountable}
 	}
 	_, dirty := planeTotals(m, hotstore.PlaneKnowledge)
 	switch {
@@ -161,302 +274,63 @@ func (r *Runner) knowledgeDrift(ctx context.Context, m hotstore.Manifest) Drift 
 	case dirty > 0:
 		return Drift{Detected: true, Reason: fmt.Sprintf("%d dirty knowledge file(s) await rehydration", dirty)}
 	}
-	if st, ok := m.Indexes[IndexKeyKnowledge]; ok && st.LastHydratedSHA != "" &&
-		st.LastHydratedSHA != PlaneStateSHA(m, hotstore.PlaneKnowledge) {
-		return Drift{Detected: true, Reason: "knowledge hot content changed since last hydration"}
+	if planeHydrationStale(m, hotstore.PlaneKnowledge) {
+		return Drift{Detected: true, Reason: reasonKnowledgeChanged}
 	}
 	return Drift{}
 }
 
 // hotNodeCount sums knowledge nodes across every hot project file.
-func (r *Runner) hotNodeCount(ctx context.Context) (int, error) {
-	projects, err := r.store.ListProjects(ctx)
+func (s *service) hotNodeCount(ctx context.Context) (int, error) {
+	projects, err := s.store.ListProjects(ctx)
 	if err != nil {
-		return 0, err
+		return 0, errs.Wrap(opHotNodeCount, err)
 	}
 	total := 0
 	for _, p := range projects {
-		g, err := r.store.ReadKnowledge(ctx, p)
+		g, err := s.store.ReadKnowledge(ctx, p)
 		if err != nil {
-			return 0, fmt.Errorf("%s: %w", p.String(), err)
+			// The project key names which hot file broke; /status shows it.
+			return 0, errs.Wrap(opHotNodeCount, fmt.Errorf("%s: %w", p.String(), err))
 		}
 		total += len(g.Nodes)
 	}
 	return total, nil
 }
 
-// planeTotals sums manifest record counts and dirty files for one plane.
-func planeTotals(m hotstore.Manifest, plane hotstore.Plane) (records, dirty int) {
-	prefix := string(plane) + "/"
-	for k, fs := range m.Files {
-		if !strings.HasPrefix(k, prefix) {
-			continue
-		}
-		records += fs.RecordCount
-		if fs.Dirty {
-			dirty++
-		}
-	}
-	return records, dirty
+// failureSep joins accumulated failure lines into one cause string.
+const failureSep = "; "
+
+// failures accumulates per-step problems for a Report while remembering
+// whether any of them was a derived store being unreachable — the difference
+// between "degraded" and "broken" (§5).
+type failures struct {
+	lines       []string
+	unavailable bool
 }
 
-// RehydrateAll implements Rehydrator.
-func (r *Runner) RehydrateAll(ctx context.Context, verify bool) (Report, error) {
-	rep := Report{Failures: []string{}}
-	projects, err := r.store.ListProjects(ctx)
-	if err != nil {
-		return rep, fmt.Errorf("rehydrate: list projects: %w", err)
-	}
-
-	epOK := make(map[string]bool, len(projects))
-	knOK := make(map[string]bool, len(projects))
-	epFull := r.rehydrateEpisodicAll(ctx, projects, verify, &rep, epOK)
-	knFull := r.rehydrateKnowledgeAll(ctx, projects, verify, &rep, knOK)
-	rep.Verified = verify
-
-	if err := r.commitManifest(ctx, projects, epOK, knOK, epFull, knFull); err != nil {
-		rep.Failures = append(rep.Failures, "manifest update: "+err.Error())
-	}
-	return rep, nil
+// add records a failure line.
+func (f *failures) add(line string) {
+	f.lines = append(f.lines, line)
 }
 
-// rehydrateEpisodicAll drops and bulk-rebuilds the episodic index. Returns
-// true when every project converged (plane fully hydrated).
-func (r *Runner) rehydrateEpisodicAll(ctx context.Context, projects []hotstore.ProjectKey, verify bool, rep *Report, ok map[string]bool) bool {
-	if r.index == nil {
-		rep.Failures = append(rep.Failures, "episodic: opensearch unavailable")
-		return false
-	}
-	full := true
-	if err := r.index.Drop(ctx); err != nil {
-		// A missing index is fine — Drop before first hydration. Report but
-		// continue; EnsureIndex decides whether the plane is usable.
-		rep.Failures = append(rep.Failures, "episodic: drop index: "+err.Error())
-	}
-	if err := r.index.EnsureIndex(ctx); err != nil {
-		rep.Failures = append(rep.Failures, "episodic: ensure index: "+err.Error())
-		return false
-	}
-	for _, p := range projects {
-		recs, err := r.store.ListEpisodes(ctx, p)
-		if err != nil {
-			rep.Failures = append(rep.Failures, fmt.Sprintf("episodic %s: list: %v", p.String(), err))
-			full = false
-			continue
-		}
-		if len(recs) > 0 {
-			if err := r.index.IndexRecords(ctx, p, recs); err != nil {
-				rep.Failures = append(rep.Failures, fmt.Sprintf("episodic %s: bulk index: %v", p.String(), err))
-				full = false
-				continue
-			}
-		}
-		if verify {
-			got, err := r.index.DocCount(ctx, p)
-			if err != nil || got != len(recs) {
-				rep.Failures = append(rep.Failures, fmt.Sprintf("episodic %s: verify: indexed %d != hot %d (err=%v)", p.String(), got, len(recs), err))
-				full = false
-				continue
-			}
-		}
-		rep.EpisodesIndexed += len(recs)
-		ok[p.String()] = true
-	}
-	return full
+// addUnavailable records a failure caused by a derived store being absent or
+// unreachable.
+func (f *failures) addUnavailable(line string) {
+	f.unavailable = true
+	f.lines = append(f.lines, line)
 }
 
-// rehydrateKnowledgeAll replays every hot knowledge graph through idempotent
-// MERGE upserts. Returns true when every project converged.
-func (r *Runner) rehydrateKnowledgeAll(ctx context.Context, projects []hotstore.ProjectKey, verify bool, rep *Report, ok map[string]bool) bool {
-	if r.graph == nil {
-		rep.Failures = append(rep.Failures, "knowledge: neo4j unavailable")
-		return false
-	}
-	full := true
-	// A full rebuild starts from a clean slate, mirroring the episodic
-	// drop-then-bulk. MERGE alone can only add or update: nodes that left hot
-	// (purged, or left behind by a previous hot state) would survive every
-	// replay, so CheckDrift would report "graph nodes N != hot nodes M"
-	// forever and no rehydration could ever clear it (§5). Only the full path
-	// clears — RehydrateProject converges one project and must not touch the
-	// others. Hot JSON is the source of truth (§0 principle 1), so a clear
-	// followed by replay is always recoverable by re-running.
-	if err := r.graph.Clear(ctx); err != nil {
-		rep.Failures = append(rep.Failures, "knowledge: clear graph: "+err.Error())
-		full = false
-	}
-	for _, p := range projects {
-		g, err := r.store.ReadKnowledge(ctx, p)
-		if err != nil {
-			rep.Failures = append(rep.Failures, fmt.Sprintf("knowledge %s: read: %v", p.String(), err))
-			full = false
-			continue
-		}
-		if len(g.Nodes) > 0 {
-			if err := r.graph.UpsertNodes(ctx, p, g.Nodes); err != nil {
-				rep.Failures = append(rep.Failures, fmt.Sprintf("knowledge %s: upsert nodes: %v", p.String(), err))
-				full = false
-				continue
-			}
-		}
-		if len(g.Edges) > 0 {
-			if err := r.graph.UpsertEdges(ctx, p, g.Edges); err != nil {
-				rep.Failures = append(rep.Failures, fmt.Sprintf("knowledge %s: upsert edges: %v", p.String(), err))
-				full = false
-				continue
-			}
-		}
-		if verify {
-			got, err := r.graph.NodeCount(ctx, p)
-			if err != nil || got != len(g.Nodes) {
-				rep.Failures = append(rep.Failures, fmt.Sprintf("knowledge %s: verify: graph %d != hot %d (err=%v)", p.String(), got, len(g.Nodes), err))
-				full = false
-				continue
-			}
-		}
-		rep.NodesUpserted += len(g.Nodes)
-		rep.EdgesUpserted += len(g.Edges)
-		ok[p.String()] = true
-	}
-	return full
-}
-
-// commitManifest clears dirty flags and refreshes IndexedAt for every project
-// that converged, and records the plane hydration sha when the whole plane
-// converged.
-func (r *Runner) commitManifest(ctx context.Context, projects []hotstore.ProjectKey, epOK, knOK map[string]bool, epFull, knFull bool) error {
-	now := r.clock.Now().UTC()
-	return r.store.UpdateManifest(ctx, func(m hotstore.Manifest) (hotstore.Manifest, error) {
-		nm := cloneManifest(m)
-		for _, p := range projects {
-			if epOK[p.String()] {
-				touchFile(&nm, FileKey(hotstore.PlaneEpisodic, p), now)
-			}
-			if knOK[p.String()] {
-				touchFile(&nm, FileKey(hotstore.PlaneKnowledge, p), now)
-			}
-		}
-		if epFull {
-			nm.Indexes[IndexKeyEpisodic] = hotstore.IndexState{LastHydratedSHA: PlaneStateSHA(nm, hotstore.PlaneEpisodic)}
-		}
-		if knFull {
-			nm.Indexes[IndexKeyKnowledge] = hotstore.IndexState{LastHydratedSHA: PlaneStateSHA(nm, hotstore.PlaneKnowledge)}
-		}
-		nm.UpdatedAt = now
-		return nm, nil
-	})
-}
-
-// touchFile marks one manifest file entry as freshly hydrated.
-func touchFile(m *hotstore.Manifest, fileKey string, now time.Time) {
-	fs, ok := m.Files[fileKey]
-	if !ok {
-		return
-	}
-	fs.Dirty = false
-	fs.IndexedAt = now
-	m.Files[fileKey] = fs
-}
-
-// RehydrateProject implements Rehydrator.
-func (r *Runner) RehydrateProject(ctx context.Context, key hotstore.ProjectKey) (Report, error) {
-	rep := Report{Failures: []string{}}
-	epOK := map[string]bool{}
-	knOK := map[string]bool{}
-
-	if r.index == nil {
-		rep.Failures = append(rep.Failures, "episodic: opensearch unavailable")
-	} else if err := r.index.EnsureIndex(ctx); err != nil {
-		rep.Failures = append(rep.Failures, "episodic: ensure index: "+err.Error())
-	} else {
-		recs, err := r.store.ListEpisodes(ctx, key)
-		switch {
-		case err != nil:
-			rep.Failures = append(rep.Failures, fmt.Sprintf("episodic %s: list: %v", key.String(), err))
-		case len(recs) == 0:
-			epOK[key.String()] = true
-		default:
-			if err := r.index.IndexRecords(ctx, key, recs); err != nil {
-				rep.Failures = append(rep.Failures, fmt.Sprintf("episodic %s: bulk index: %v", key.String(), err))
-			} else {
-				rep.EpisodesIndexed = len(recs)
-				epOK[key.String()] = true
-			}
-		}
-	}
-
-	if r.graph == nil {
-		rep.Failures = append(rep.Failures, "knowledge: neo4j unavailable")
-	} else {
-		g, err := r.store.ReadKnowledge(ctx, key)
-		if err != nil {
-			rep.Failures = append(rep.Failures, fmt.Sprintf("knowledge %s: read: %v", key.String(), err))
-		} else {
-			nodeErr := error(nil)
-			if len(g.Nodes) > 0 {
-				nodeErr = r.graph.UpsertNodes(ctx, key, g.Nodes)
-			}
-			if nodeErr == nil && len(g.Edges) > 0 {
-				nodeErr = r.graph.UpsertEdges(ctx, key, g.Edges)
-			}
-			if nodeErr != nil {
-				rep.Failures = append(rep.Failures, fmt.Sprintf("knowledge %s: upsert: %v", key.String(), nodeErr))
-			} else {
-				rep.NodesUpserted = len(g.Nodes)
-				rep.EdgesUpserted = len(g.Edges)
-				knOK[key.String()] = true
-			}
-		}
-	}
-
-	if err := r.commitManifest(ctx, []hotstore.ProjectKey{key}, epOK, knOK, epOK[key.String()], knOK[key.String()]); err != nil {
-		rep.Failures = append(rep.Failures, "manifest update: "+err.Error())
-	}
-	if len(rep.Failures) > 0 {
-		return rep, errors.New("rehydrate: " + strings.Join(rep.Failures, "; "))
-	}
-	return rep, nil
-}
-
-// StatGate implements Rehydrator.
-func (r *Runner) StatGate(ctx context.Context, key hotstore.ProjectKey) error {
-	now := r.clock.Now()
-	r.mu.Lock()
-	last, seen := r.lastGate[key.String()]
-	if seen && now.Sub(last) < DebounceInterval {
-		r.mu.Unlock()
+// err returns the semantic error for the accumulated failures, or nil when
+// there were none. The joined detail stays in the cause: it belongs in logs,
+// not in a response body.
+func (f *failures) err(op string) error {
+	if len(f.lines) == 0 {
 		return nil
 	}
-	r.lastGate[key.String()] = now
-	r.mu.Unlock()
-
-	m, err := r.store.Manifest(ctx)
-	if err != nil {
-		return fmt.Errorf("rehydrate: stat-gate manifest: %w", err)
+	joined := errors.New(strings.Join(f.lines, failureSep))
+	if f.unavailable {
+		return errs.Unavailable(op, joined)
 	}
-	if !r.needsRehydration(ctx, m, key) {
-		return nil
-	}
-	_, err = r.RehydrateProject(ctx, key)
-	return err
-}
-
-// needsRehydration is the cheap freshness check: dirty flag, file mtime newer
-// than the manifest IndexedAt, or a hot file the manifest has never seen.
-func (r *Runner) needsRehydration(ctx context.Context, m hotstore.Manifest, key hotstore.ProjectKey) bool {
-	for _, plane := range []hotstore.Plane{hotstore.PlaneEpisodic, hotstore.PlaneKnowledge} {
-		fs, tracked := m.Files[FileKey(plane, key)]
-		if tracked && fs.Dirty {
-			return true
-		}
-		_, mtime, err := r.store.FileInfo(ctx, key, plane)
-		if err != nil {
-			// Missing file (or unreadable) — nothing to converge for this plane.
-			continue
-		}
-		if !tracked || mtime.After(fs.IndexedAt) {
-			return true
-		}
-	}
-	return false
+	return errs.Internal(op, joined)
 }

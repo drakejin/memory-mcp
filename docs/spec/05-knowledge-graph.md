@@ -262,7 +262,7 @@ RETURN node ORDER BY score DESC LIMIT 50
 1. `validateProjectKey` → `CreateNodeRequest.validate()` (kind/name/trust/provenance ULID/supersedes ULID/review_after)
 2. `ulid.At(now.UnixMilli())`로 id 부여, `state: active`, `aliases`·`provenance`는 `normalizeStrings`(trim + 빈 문자열 제거, **절대 nil이 아님** — hot JSON에 `null` 대신 `[]`가 들어가도록)
 3. `ReadKnowledge` → `supersedes`가 있으면 `knowledge.Supersede`, 없으면 노드만 append
-4. `WriteKnowledge` — **여기가 커밋 지점.** 실패하면 500이고 그래프는 건드리지 않는다
+4. `UpdateKnowledge` 클로저 반환 — **여기가 커밋 지점.** 1-3단계가 전부 이 클로저 안(스토어 락 안)에서 일어나므로 동시 쓰기가 서로를 덮어쓰지 못한다. 실패하면 500이고 그래프는 건드리지 않는다
 5. `mirrorKnowledge`: `affectedNodes`(새 노드 + 전이된 패자들만) + `diffEdges`(직전 그래프에 없던 엣지만)를 골라 최소 범위로 `UpsertNodes` → `UpsertEdges`
 
 5가 실패하면 요청은 여전히 **201**이고, `data.degraded: ["graph unavailable"]`와 함께 manifest에 `PlaneKnowledge` dirty가 찍힌다. 성공하면 `markIndexed`. degraded는 에러가 아니라는 규약(code-standards §2.2)이 여기 그대로 적용된다. 반대로 **읽기 경로**(`/knowledge/search`, `/knowledge/graph`)는 `deps.Graph == nil`이거나 `graph.ErrUnavailable`이면 **503**을 낸다 — 파생물이 없으면 대답할 수 없기 때문이다.

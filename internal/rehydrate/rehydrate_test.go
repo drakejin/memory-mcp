@@ -8,10 +8,9 @@ import (
 	"time"
 
 	"github.com/drakejin/memory-mcp/internal/episodic"
-	"github.com/drakejin/memory-mcp/internal/graph"
+	"github.com/drakejin/memory-mcp/internal/errs"
 	"github.com/drakejin/memory-mcp/internal/hotstore"
 	"github.com/drakejin/memory-mcp/internal/knowledge"
-	"github.com/drakejin/memory-mcp/internal/search"
 )
 
 // --- fakes -----------------------------------------------------------------
@@ -20,12 +19,12 @@ type fakeClock struct{ now time.Time }
 
 func (c *fakeClock) Now() time.Time { return c.now }
 
-// fakeStore is an in-memory hotstore.Store covering what the Runner uses.
+// fakeStore is an in-memory HotStore.
 type fakeStore struct {
 	episodes map[string][]episodic.Record
 	graphs   map[string]knowledge.Graph
 	manifest hotstore.Manifest
-	mtimes   map[string]time.Time // fileKey -> mtime
+	mtimes   map[string]time.Time // manifest file key -> mtime
 	// listErr fails ListProjects (and, transitively, anything that enumerates).
 	listErr   error
 	failWrite bool
@@ -47,11 +46,6 @@ func newFakeStore() *fakeStore {
 	}
 }
 
-func (s *fakeStore) AppendEpisode(_ context.Context, key hotstore.ProjectKey, rec episodic.Record) error {
-	s.episodes[key.String()] = append(s.episodes[key.String()], rec)
-	return nil
-}
-
 func (s *fakeStore) ListEpisodes(_ context.Context, key hotstore.ProjectKey) ([]episodic.Record, error) {
 	if s.episodeListErr != nil {
 		return nil, s.episodeListErr
@@ -62,43 +56,11 @@ func (s *fakeStore) ListEpisodes(_ context.Context, key hotstore.ProjectKey) ([]
 	return s.episodes[key.String()], nil
 }
 
-func (s *fakeStore) GetEpisode(_ context.Context, key hotstore.ProjectKey, id string) (episodic.Record, error) {
-	for _, r := range s.episodes[key.String()] {
-		if r.ID == id {
-			return r, nil
-		}
-	}
-	return episodic.Record{}, hotstore.ErrNotFound
-}
-
-func (s *fakeStore) UpdateEpisodes(_ context.Context, key hotstore.ProjectKey, ids []string, fn func(episodic.Record) episodic.Record) error {
-	want := map[string]bool{}
-	for _, id := range ids {
-		want[id] = true
-	}
-	recs := s.episodes[key.String()]
-	for i, r := range recs {
-		if want[r.ID] {
-			recs[i] = fn(r)
-		}
-	}
-	return nil
-}
-
-func (s *fakeStore) RemoveEpisodes(_ context.Context, _ hotstore.ProjectKey, _ []string) error {
-	return nil
-}
-
 func (s *fakeStore) ReadKnowledge(_ context.Context, key hotstore.ProjectKey) (knowledge.Graph, error) {
 	if s.readKnowledgeErr != nil {
 		return knowledge.Graph{}, s.readKnowledgeErr
 	}
 	return s.graphs[key.String()], nil
-}
-
-func (s *fakeStore) WriteKnowledge(_ context.Context, key hotstore.ProjectKey, g knowledge.Graph) error {
-	s.graphs[key.String()] = g
-	return nil
 }
 
 func (s *fakeStore) ListProjects(_ context.Context) ([]hotstore.ProjectKey, error) {
@@ -143,33 +105,28 @@ func (s *fakeStore) UpdateManifest(_ context.Context, fn func(hotstore.Manifest)
 	return nil
 }
 
-func (s *fakeStore) MarkDirty(_ context.Context, key hotstore.ProjectKey, plane hotstore.Plane) error {
-	fk := string(plane) + "/" + key.String()
-	fs := s.manifest.Files[fk]
-	fs.Dirty = true
-	s.manifest.Files[fk] = fs
-	return nil
-}
-
 func (s *fakeStore) FileInfo(_ context.Context, key hotstore.ProjectKey, plane hotstore.Plane) (int64, time.Time, error) {
-	fk := string(plane) + "/" + key.String()
+	fk := hotstore.ManifestFileKey(plane, key)
 	mt, ok := s.mtimes[fk]
 	if !ok {
-		return 0, time.Time{}, hotstore.ErrNotFound
+		return 0, time.Time{}, errs.NotFound("fake.FileInfo", "hot_file", fk)
 	}
 	return 1, mt, nil
 }
 
-// fakeIndex is an in-memory search.Index.
+// fakeIndex is an in-memory EpisodeIndex.
 type fakeIndex struct {
-	docs        map[string]map[string]episodic.Record // project -> id -> rec
-	pingErr     error
-	indexErr    error
-	dropErr     error
-	countErr    error
-	indexCalls  int
-	dropCalls   int
-	ensureCalls int
+	docs             map[string]map[string]episodic.Record // project -> id -> rec
+	pingErr          error
+	indexErr         error
+	dropErr          error
+	deleteProjectErr error
+	countErr         error
+	ensureErr        error
+	indexCalls       int
+	dropCalls        int
+	deleteProjectIDs []string // project keys passed to DeleteProject, in order
+	ensureCalls      int
 }
 
 func newFakeIndex() *fakeIndex {
@@ -180,7 +137,7 @@ func (f *fakeIndex) Ping(_ context.Context) error { return f.pingErr }
 
 func (f *fakeIndex) EnsureIndex(_ context.Context) error {
 	f.ensureCalls++
-	return nil
+	return f.ensureErr
 }
 
 func (f *fakeIndex) IndexRecords(_ context.Context, key hotstore.ProjectKey, recs []episodic.Record) error {
@@ -199,17 +156,6 @@ func (f *fakeIndex) IndexRecords(_ context.Context, key hotstore.ProjectKey, rec
 	return nil
 }
 
-func (f *fakeIndex) DeleteRecords(_ context.Context, key hotstore.ProjectKey, ids []string) error {
-	for _, id := range ids {
-		delete(f.docs[key.String()], id)
-	}
-	return nil
-}
-
-func (f *fakeIndex) Search(_ context.Context, _ hotstore.ProjectKey, _ search.Query) ([]search.Hit, error) {
-	return nil, nil
-}
-
 func (f *fakeIndex) DocCount(_ context.Context, key hotstore.ProjectKey) (int, error) {
 	if f.countErr != nil {
 		return 0, f.countErr
@@ -224,6 +170,16 @@ func (f *fakeIndex) DocCount(_ context.Context, key hotstore.ProjectKey) (int, e
 	return len(f.docs[key.String()]), nil
 }
 
+// DeleteProject drops one project's documents, like the real delete-by-query.
+func (f *fakeIndex) DeleteProject(_ context.Context, key hotstore.ProjectKey) error {
+	f.deleteProjectIDs = append(f.deleteProjectIDs, key.String())
+	if f.deleteProjectErr != nil {
+		return f.deleteProjectErr
+	}
+	delete(f.docs, key.String())
+	return nil
+}
+
 func (f *fakeIndex) Drop(_ context.Context) error {
 	f.dropCalls++
 	if f.dropErr != nil {
@@ -233,12 +189,15 @@ func (f *fakeIndex) Drop(_ context.Context) error {
 	return nil
 }
 
-// fakeGraph is an in-memory graph.Store.
+// fakeGraph is an in-memory KnowledgeGraph.
 type fakeGraph struct {
-	nodes     map[string]map[string]knowledge.Node
-	edges     map[string][]knowledge.Edge
-	pingErr   error
-	upsertErr error
+	nodes            map[string]map[string]knowledge.Node
+	edges            map[string][]knowledge.Edge
+	pingErr          error
+	upsertErr        error
+	deleteMissingErr error
+	// deleteMissingKeep records the keep-list of each DeleteMissing call.
+	deleteMissingKeep [][]string
 	// nodeCountOverride (>0) forces a verify mismatch.
 	nodeCountOverride int
 }
@@ -272,21 +231,30 @@ func (f *fakeGraph) UpsertEdges(_ context.Context, key hotstore.ProjectKey, edge
 	return nil
 }
 
-func (f *fakeGraph) DeleteNode(_ context.Context, key hotstore.ProjectKey, id string) error {
-	delete(f.nodes[key.String()], id)
+// DeleteMissing drops this project's nodes whose id is not in keep, and the
+// edges incident to them — the DETACH DELETE of the real client.
+func (f *fakeGraph) DeleteMissing(_ context.Context, key hotstore.ProjectKey, keep []string) error {
+	f.deleteMissingKeep = append(f.deleteMissingKeep, keep)
+	if f.deleteMissingErr != nil {
+		return f.deleteMissingErr
+	}
+	kept := make(map[string]bool, len(keep))
+	for _, id := range keep {
+		kept[id] = true
+	}
+	for id := range f.nodes[key.String()] {
+		if !kept[id] {
+			delete(f.nodes[key.String()], id)
+		}
+	}
+	edges := f.edges[key.String()][:0:0]
+	for _, e := range f.edges[key.String()] {
+		if kept[e.From] && kept[e.To] {
+			edges = append(edges, e)
+		}
+	}
+	f.edges[key.String()] = edges
 	return nil
-}
-
-func (f *fakeGraph) Search(_ context.Context, _ hotstore.ProjectKey, _ string, _ bool) ([]knowledge.Node, error) {
-	return nil, nil
-}
-
-func (f *fakeGraph) Neighborhood(_ context.Context, _ hotstore.ProjectKey, _ string, _ int) (knowledge.Graph, error) {
-	return knowledge.Graph{}, nil
-}
-
-func (f *fakeGraph) SupersedeChain(_ context.Context, _ hotstore.ProjectKey, _ string) ([]knowledge.Node, error) {
-	return nil, nil
 }
 
 func (f *fakeGraph) NodeCount(_ context.Context, key hotstore.ProjectKey) (int, error) {
@@ -313,12 +281,57 @@ func (f *fakeGraph) Clear(_ context.Context) error {
 
 var testKey = hotstore.ProjectKey{Workspace: "ws", Team: "team", Project: "proj"}
 
+// newService builds the concrete service so tests can reach the unexported
+// drift helpers; production callers only ever see the Service interface.
+func newService(t *testing.T, store HotStore, index EpisodeIndex, gr KnowledgeGraph, clock Clock) *service {
+	t.Helper()
+	svc, err := New(Config{Store: store, Index: index, Graph: gr, Clock: clock})
+	if err != nil {
+		t.Fatalf("New() = %v", err)
+	}
+	return svc.(*service)
+}
+
 func rec(id string, at time.Time) episodic.Record {
 	return episodic.Record{ID: id, Kind: episodic.KindEvent, Actor: episodic.ActorAgent, Text: "t", OccurredAt: at, Entities: []string{}}
 }
 
 func node(id string) knowledge.Node {
 	return knowledge.Node{ID: id, Kind: knowledge.KindFact, Name: "n", State: knowledge.StateActive, Trust: knowledge.TrustUserStated}
+}
+
+// --- construction ----------------------------------------------------------
+
+func TestNewRejectsIncompleteConfig(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  Config
+	}{
+		{name: "missing store", cfg: Config{Clock: &fakeClock{}}},
+		{name: "missing clock", cfg: Config{Store: newFakeStore()}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc, err := New(tt.cfg)
+			if err == nil {
+				t.Fatal("New() = nil error, want invalid config")
+			}
+			if !errors.Is(err, errs.ErrInvalid) {
+				t.Errorf("New() error = %v, want kind invalid", err)
+			}
+			if svc != nil {
+				t.Error("New() must not return a service alongside an error")
+			}
+		})
+	}
+}
+
+func TestNewAcceptsNilDerivedStores(t *testing.T) {
+	// Both derived stores may be down at boot; the server must still build a
+	// rehydrator so /status can report the outage (§5).
+	if _, err := New(Config{Store: newFakeStore(), Clock: &fakeClock{}}); err != nil {
+		t.Fatalf("New() = %v", err)
+	}
 }
 
 // --- tests -----------------------------------------------------------------
@@ -345,19 +358,28 @@ func TestCheckDrift(t *testing.T) {
 			nilIdx: true,
 			nilGra: true,
 			want: DriftReport{
-				Episodic:  Drift{Unavailable: true, Reason: "opensearch not configured"},
-				Knowledge: Drift{Unavailable: true, Reason: "neo4j not configured"},
+				Episodic:  Drift{Unavailable: true, Reason: reasonIndexNotConfigured},
+				Knowledge: Drift{Unavailable: true, Reason: reasonGraphNotConfigured},
 			},
 		},
 		{
 			name: "ping failures are unavailable",
 			setup: func(s *fakeStore, i *fakeIndex, g *fakeGraph) {
-				i.pingErr = search.ErrUnavailable
+				i.pingErr = errs.Unavailable("fake.Ping", nil)
 				g.pingErr = errors.New("down")
 			},
 			want: DriftReport{
-				Episodic:  Drift{Unavailable: true, Reason: "opensearch unreachable"},
-				Knowledge: Drift{Unavailable: true, Reason: "neo4j unreachable"},
+				Episodic:  Drift{Unavailable: true, Reason: reasonIndexUnreachable},
+				Knowledge: Drift{Unavailable: true, Reason: reasonGraphUnreachable},
+			},
+		},
+		{
+			name: "uncountable index is drift, not unavailability",
+			setup: func(s *fakeStore, i *fakeIndex, g *fakeGraph) {
+				i.countErr = errors.New("index_not_found_exception")
+			},
+			want: DriftReport{
+				Episodic: Drift{Detected: true, Reason: reasonIndexAbsent},
 			},
 		},
 		{
@@ -390,13 +412,32 @@ func TestCheckDrift(t *testing.T) {
 			},
 		},
 		{
+			name: "dirty knowledge file detected",
+			setup: func(s *fakeStore, i *fakeIndex, g *fakeGraph) {
+				s.manifest.Files["knowledge/ws/team/proj"] = hotstore.FileState{SHA256: "k", RecordCount: 0, Dirty: true}
+			},
+			want: DriftReport{
+				Knowledge: Drift{Detected: true, Reason: "1 dirty knowledge file(s) await rehydration"},
+			},
+		},
+		{
 			name: "hydration sha mismatch detected",
 			setup: func(s *fakeStore, i *fakeIndex, g *fakeGraph) {
 				s.manifest.Files["episodic/ws/team/proj"] = hotstore.FileState{SHA256: "changed", RecordCount: 0}
-				s.manifest.Indexes[IndexKeyEpisodic] = hotstore.IndexState{LastHydratedSHA: "stale"}
+				s.manifest.Indexes[indexKeyEpisodic] = hotstore.IndexState{LastHydratedSHA: "stale"}
 			},
 			want: DriftReport{
-				Episodic: Drift{Detected: true, Reason: "episodic hot content changed since last hydration"},
+				Episodic: Drift{Detected: true, Reason: reasonEpisodicChanged},
+			},
+		},
+		{
+			name: "knowledge hydration sha mismatch detected",
+			setup: func(s *fakeStore, i *fakeIndex, g *fakeGraph) {
+				s.manifest.Files["knowledge/ws/team/proj"] = hotstore.FileState{SHA256: "changed"}
+				s.manifest.Indexes[indexKeyKnowledge] = hotstore.IndexState{LastHydratedSHA: "stale"}
+			},
+			want: DriftReport{
+				Knowledge: Drift{Detected: true, Reason: reasonKnowledgeChanged},
 			},
 		},
 	}
@@ -408,15 +449,15 @@ func TestCheckDrift(t *testing.T) {
 			gra := newFakeGraph()
 			tt.setup(store, idx, gra)
 
-			var idxDep search.Index
+			var idxDep EpisodeIndex
 			if !tt.nilIdx {
 				idxDep = idx
 			}
-			var graDep graph.Store
+			var graDep KnowledgeGraph
 			if !tt.nilGra {
 				graDep = gra
 			}
-			r := New(store, idxDep, graDep, &fakeClock{now: base})
+			r := newService(t, store, idxDep, graDep, &fakeClock{now: base})
 
 			got, err := r.CheckDrift(context.Background())
 			if (err != nil) != tt.wantErr {
@@ -442,7 +483,7 @@ func TestRehydrateAll(t *testing.T) {
 
 	idx := newFakeIndex()
 	gra := newFakeGraph()
-	r := New(store, idx, gra, &fakeClock{now: base})
+	r := newService(t, store, idx, gra, &fakeClock{now: base})
 
 	rep, err := r.RehydrateAll(context.Background(), false)
 	if err != nil {
@@ -470,10 +511,10 @@ func TestRehydrateAll(t *testing.T) {
 			t.Errorf("%s IndexedAt = %v, want %v", fk, fs.IndexedAt, base)
 		}
 	}
-	if store.manifest.Indexes[IndexKeyEpisodic].LastHydratedSHA != PlaneStateSHA(store.manifest, hotstore.PlaneEpisodic) {
+	if store.manifest.Indexes[indexKeyEpisodic].LastHydratedSHA != PlaneStateSHA(store.manifest, hotstore.PlaneEpisodic) {
 		t.Errorf("episodic hydration sha not recorded")
 	}
-	if store.manifest.Indexes[IndexKeyKnowledge].LastHydratedSHA != PlaneStateSHA(store.manifest, hotstore.PlaneKnowledge) {
+	if store.manifest.Indexes[indexKeyKnowledge].LastHydratedSHA != PlaneStateSHA(store.manifest, hotstore.PlaneKnowledge) {
 		t.Errorf("knowledge hydration sha not recorded")
 	}
 	// And drift must now be clean.
@@ -493,8 +534,8 @@ func TestRehydrateAllDegraded(t *testing.T) {
 	store.manifest.Files["episodic/ws/team/proj"] = hotstore.FileState{SHA256: "e1", RecordCount: 1, Dirty: true}
 
 	idx := newFakeIndex()
-	idx.indexErr = search.ErrUnavailable
-	r := New(store, idx, nil, &fakeClock{now: base})
+	idx.indexErr = errs.Unavailable("fake.IndexRecords", nil)
+	r := newService(t, store, idx, nil, &fakeClock{now: base})
 
 	rep, err := r.RehydrateAll(context.Background(), false)
 	if err != nil {
@@ -506,8 +547,24 @@ func TestRehydrateAllDegraded(t *testing.T) {
 	if !store.manifest.Files["episodic/ws/team/proj"].Dirty {
 		t.Errorf("dirty flag cleared despite failed rehydration")
 	}
-	if _, ok := store.manifest.Indexes[IndexKeyEpisodic]; ok {
+	if _, ok := store.manifest.Indexes[indexKeyEpisodic]; ok {
 		t.Errorf("hydration sha recorded despite failure")
+	}
+}
+
+func TestRehydrateAllManifestWriteFailureIsReported(t *testing.T) {
+	base := time.Date(2026, 8, 25, 0, 0, 0, 0, time.UTC)
+	store := newFakeStore()
+	store.episodes[testKey.String()] = []episodic.Record{rec("01AAAAAAAAAAAAAAAAAAAAAAAA", base)}
+	store.failWrite = true
+	r := newService(t, store, newFakeIndex(), newFakeGraph(), &fakeClock{now: base})
+
+	rep, err := r.RehydrateAll(context.Background(), false)
+	if err != nil {
+		t.Fatalf("RehydrateAll: %v", err)
+	}
+	if !hasFailureContaining(rep.Failures, "manifest update") {
+		t.Errorf("failures = %v, want the manifest write failure disclosed", rep.Failures)
 	}
 }
 
@@ -518,7 +575,7 @@ func TestRehydrateAllVerifyMismatch(t *testing.T) {
 
 	idx := newFakeIndex()
 	idx.countErr = errors.New("count broken")
-	r := New(store, idx, newFakeGraph(), &fakeClock{now: base})
+	r := newService(t, store, idx, newFakeGraph(), &fakeClock{now: base})
 
 	rep, err := r.RehydrateAll(context.Background(), true)
 	if err != nil {
@@ -543,7 +600,7 @@ func TestRehydrateProject(t *testing.T) {
 	store.manifest.Files["episodic/ws/team/other"] = hotstore.FileState{SHA256: "e2", RecordCount: 1, Dirty: true}
 
 	idx := newFakeIndex()
-	r := New(store, idx, newFakeGraph(), &fakeClock{now: base})
+	r := newService(t, store, idx, newFakeGraph(), &fakeClock{now: base})
 
 	rep, err := r.RehydrateProject(context.Background(), testKey)
 	if err != nil {
@@ -563,6 +620,164 @@ func TestRehydrateProject(t *testing.T) {
 	}
 }
 
+// The partial path clears the dirty flag it converged, so it must actually
+// converge removals too. IndexRecords alone can only add or update: an episode
+// that left hot — aged to cold after §3.1, or dropped by a consolidation whose
+// index delete failed — would otherwise stay searchable forever with nothing
+// left flagged to fix it (§3.1: search covers the hot range only).
+func TestRehydrateProjectDropsEpisodesNoLongerHot(t *testing.T) {
+	// Arrange: the index still holds an aged-out record the hot file no longer
+	// has, exactly the state consolidate leaves behind when DeleteRecords fails.
+	base := time.Date(2026, 8, 25, 0, 0, 0, 0, time.UTC)
+	const survivor, aged = "01AAAAAAAAAAAAAAAAAAAAAAAA", "01AAAAAAAAAAAAAAAAAAAAAAAZ"
+	other := hotstore.ProjectKey{Workspace: "ws", Team: "team", Project: "other"}
+
+	store := newFakeStore()
+	store.episodes[testKey.String()] = []episodic.Record{rec(survivor, base)}
+	store.manifest.Files["episodic/ws/team/proj"] = hotstore.FileState{SHA256: "e1", RecordCount: 1, Dirty: true}
+
+	idx := newFakeIndex()
+	idx.docs[testKey.String()] = map[string]episodic.Record{
+		survivor: rec(survivor, base),
+		aged:     rec(aged, base),
+	}
+	idx.docs[other.String()] = map[string]episodic.Record{"01BBBBBBBBBBBBBBBBBBBBBBBB": rec("01BBBBBBBBBBBBBBBBBBBBBBBB", base)}
+	r := newService(t, store, idx, newFakeGraph(), &fakeClock{now: base})
+
+	// Act
+	if _, err := r.RehydrateProject(context.Background(), testKey); err != nil {
+		t.Fatalf("RehydrateProject: %v", err)
+	}
+
+	// Assert
+	if _, still := idx.docs[testKey.String()][aged]; still {
+		t.Errorf("episode %s is not in hot but survived rehydration — it stays searchable while the manifest says clean", aged)
+	}
+	if _, ok := idx.docs[testKey.String()][survivor]; !ok {
+		t.Errorf("hot episode %s was not replayed into the index", survivor)
+	}
+	if len(idx.docs[other.String()]) != 1 {
+		t.Errorf("partial rehydration deleted another project's documents: %v", idx.docs[other.String()])
+	}
+	if store.manifest.Files["episodic/ws/team/proj"].Dirty {
+		t.Errorf("dirty flag still set after a converging pass")
+	}
+}
+
+// A project whose every episode aged out still has stale index documents, so
+// "no hot records" must not short-circuit the delete.
+func TestRehydrateProjectWithEmptyHotStillClearsIndex(t *testing.T) {
+	// Arrange
+	base := time.Date(2026, 8, 25, 0, 0, 0, 0, time.UTC)
+	store := newFakeStore()
+	store.episodes[testKey.String()] = nil
+	store.manifest.Files["episodic/ws/team/proj"] = hotstore.FileState{SHA256: "e1", Dirty: true}
+
+	idx := newFakeIndex()
+	idx.docs[testKey.String()] = map[string]episodic.Record{"01AAAAAAAAAAAAAAAAAAAAAAAZ": rec("01AAAAAAAAAAAAAAAAAAAAAAAZ", base)}
+	r := newService(t, store, idx, newFakeGraph(), &fakeClock{now: base})
+
+	// Act
+	if _, err := r.RehydrateProject(context.Background(), testKey); err != nil {
+		t.Fatalf("RehydrateProject: %v", err)
+	}
+
+	// Assert
+	if n := len(idx.docs[testKey.String()]); n != 0 {
+		t.Errorf("index holds %d documents for a project with no hot records, want 0", n)
+	}
+}
+
+// The knowledge counterpart: MERGE replay cannot remove, so a node purged from
+// hot whose live Neo4j delete failed would survive every replay while the dirty
+// flag that recorded the failure gets cleared — permanent graph-only content,
+// which §0 principle 1 forbids.
+func TestRehydrateProjectDropsNodesNoLongerHot(t *testing.T) {
+	// Arrange
+	base := time.Date(2026, 8, 25, 0, 0, 0, 0, time.UTC)
+	const survivor, purged = "01AAAAAAAAAAAAAAAAAAAAAAAA", "01AAAAAAAAAAAAAAAAAAAAAAAZ"
+	other := hotstore.ProjectKey{Workspace: "ws", Team: "team", Project: "other"}
+
+	store := newFakeStore()
+	store.graphs[testKey.String()] = knowledge.Graph{Nodes: []knowledge.Node{node(survivor)}}
+	store.manifest.Files["knowledge/ws/team/proj"] = hotstore.FileState{SHA256: "k1", RecordCount: 1, Dirty: true}
+
+	gr := newFakeGraph()
+	gr.nodes[testKey.String()] = map[string]knowledge.Node{survivor: node(survivor), purged: node(purged)}
+	gr.nodes[other.String()] = map[string]knowledge.Node{"01BBBBBBBBBBBBBBBBBBBBBBBB": node("01BBBBBBBBBBBBBBBBBBBBBBBB")}
+	r := newService(t, store, newFakeIndex(), gr, &fakeClock{now: base})
+
+	// Act
+	if _, err := r.RehydrateProject(context.Background(), testKey); err != nil {
+		t.Fatalf("RehydrateProject: %v", err)
+	}
+
+	// Assert
+	if _, still := gr.nodes[testKey.String()][purged]; still {
+		t.Errorf("node %s is not in hot but survived rehydration", purged)
+	}
+	if _, ok := gr.nodes[testKey.String()][survivor]; !ok {
+		t.Errorf("hot node %s was not replayed into the graph", survivor)
+	}
+	if len(gr.nodes[other.String()]) != 1 {
+		t.Errorf("partial rehydration deleted another project's nodes: %v", gr.nodes[other.String()])
+	}
+	if store.manifest.Files["knowledge/ws/team/proj"].Dirty {
+		t.Errorf("dirty flag still set after a converging pass")
+	}
+}
+
+// A failed reconciliation must leave the dirty flag standing: clearing it would
+// throw away the only signal that the plane still has to converge.
+func TestRehydrateProjectKeepsDirtyWhenDeleteFails(t *testing.T) {
+	tests := []struct {
+		name    string
+		fileKey string
+		arrange func(*fakeStore, *fakeIndex, *fakeGraph)
+	}{
+		{
+			name:    "episodic delete fails",
+			fileKey: "episodic/ws/team/proj",
+			arrange: func(s *fakeStore, i *fakeIndex, _ *fakeGraph) {
+				s.episodes[testKey.String()] = []episodic.Record{rec("01AAAAAAAAAAAAAAAAAAAAAAAA", time.Time{})}
+				i.deleteProjectErr = errors.New("opensearch down")
+			},
+		},
+		{
+			name:    "knowledge reconcile fails",
+			fileKey: "knowledge/ws/team/proj",
+			arrange: func(s *fakeStore, _ *fakeIndex, g *fakeGraph) {
+				s.graphs[testKey.String()] = knowledge.Graph{Nodes: []knowledge.Node{node("01AAAAAAAAAAAAAAAAAAAAAAAA")}}
+				g.deleteMissingErr = errors.New("neo4j down")
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			base := time.Date(2026, 8, 25, 0, 0, 0, 0, time.UTC)
+			store, idx, gr := newFakeStore(), newFakeIndex(), newFakeGraph()
+			tt.arrange(store, idx, gr)
+			store.manifest.Files[tt.fileKey] = hotstore.FileState{SHA256: "s", RecordCount: 1, Dirty: true}
+			r := newService(t, store, idx, gr, &fakeClock{now: base})
+
+			// Act
+			rep, err := r.RehydrateProject(context.Background(), testKey)
+
+			// Assert
+			if err == nil {
+				t.Fatal("RehydrateProject returned nil error after a failed reconciliation")
+			}
+			if len(rep.Failures) == 0 {
+				t.Error("Report.Failures is empty — the failure was not reported")
+			}
+			if !store.manifest.Files[tt.fileKey].Dirty {
+				t.Errorf("%s dirty flag cleared although the pass never converged", tt.fileKey)
+			}
+		})
+	}
+}
+
 func TestStatGate(t *testing.T) {
 	base := time.Date(2026, 8, 25, 0, 0, 0, 0, time.UTC)
 
@@ -574,7 +789,7 @@ func TestStatGate(t *testing.T) {
 
 		clock := &fakeClock{now: base}
 		idx := newFakeIndex()
-		r := New(store, idx, newFakeGraph(), clock)
+		r := newService(t, store, idx, newFakeGraph(), clock)
 
 		if err := r.StatGate(context.Background(), testKey); err != nil {
 			t.Fatalf("StatGate: %v", err)
@@ -582,9 +797,9 @@ func TestStatGate(t *testing.T) {
 		if idx.indexCalls != 1 {
 			t.Fatalf("indexCalls = %d, want 1", idx.indexCalls)
 		}
-		// Mark dirty again; within the 2s window nothing may happen.
+		// Mark dirty again; within the debounce window nothing may happen.
 		store.manifest.Files["episodic/ws/team/proj"] = hotstore.FileState{SHA256: "e1", RecordCount: 1, Dirty: true}
-		clock.now = base.Add(time.Second)
+		clock.now = base.Add(debounceInterval / 2)
 		if err := r.StatGate(context.Background(), testKey); err != nil {
 			t.Fatalf("StatGate (debounced): %v", err)
 		}
@@ -592,7 +807,7 @@ func TestStatGate(t *testing.T) {
 			t.Errorf("debounce failed: indexCalls = %d, want 1", idx.indexCalls)
 		}
 		// After the window it converges again.
-		clock.now = base.Add(3 * time.Second)
+		clock.now = base.Add(debounceInterval + time.Second)
 		if err := r.StatGate(context.Background(), testKey); err != nil {
 			t.Fatalf("StatGate (post-debounce): %v", err)
 		}
@@ -608,7 +823,22 @@ func TestStatGate(t *testing.T) {
 		store.mtimes["episodic/ws/team/proj"] = base // newer than IndexedAt
 
 		idx := newFakeIndex()
-		r := New(store, idx, newFakeGraph(), &fakeClock{now: base})
+		r := newService(t, store, idx, newFakeGraph(), &fakeClock{now: base})
+		if err := r.StatGate(context.Background(), testKey); err != nil {
+			t.Fatalf("StatGate: %v", err)
+		}
+		if idx.indexCalls != 1 {
+			t.Errorf("indexCalls = %d, want 1", idx.indexCalls)
+		}
+	})
+
+	t.Run("untracked hot file triggers rehydration", func(t *testing.T) {
+		store := newFakeStore()
+		store.episodes[testKey.String()] = []episodic.Record{rec("01AAAAAAAAAAAAAAAAAAAAAAAA", base)}
+		store.mtimes["episodic/ws/team/proj"] = base // present on disk, absent from the manifest
+
+		idx := newFakeIndex()
+		r := newService(t, store, idx, newFakeGraph(), &fakeClock{now: base})
 		if err := r.StatGate(context.Background(), testKey); err != nil {
 			t.Fatalf("StatGate: %v", err)
 		}
@@ -623,12 +853,28 @@ func TestStatGate(t *testing.T) {
 		store.mtimes["episodic/ws/team/proj"] = base.Add(-time.Minute)
 
 		idx := newFakeIndex()
-		r := New(store, idx, newFakeGraph(), &fakeClock{now: base})
+		r := newService(t, store, idx, newFakeGraph(), &fakeClock{now: base})
 		if err := r.StatGate(context.Background(), testKey); err != nil {
 			t.Fatalf("StatGate: %v", err)
 		}
 		if idx.indexCalls != 0 {
 			t.Errorf("indexCalls = %d, want 0 (no drift)", idx.indexCalls)
+		}
+	})
+
+	t.Run("a failing rehydration surfaces as unavailable", func(t *testing.T) {
+		store := newFakeStore()
+		store.episodes[testKey.String()] = []episodic.Record{rec("01AAAAAAAAAAAAAAAAAAAAAAAA", base)}
+		store.manifest.Files["episodic/ws/team/proj"] = hotstore.FileState{SHA256: "e1", RecordCount: 1, Dirty: true}
+		store.mtimes["episodic/ws/team/proj"] = base
+
+		r := newService(t, store, nil, nil, &fakeClock{now: base})
+		err := r.StatGate(context.Background(), testKey)
+		if err == nil {
+			t.Fatal("StatGate must report a rehydration that could not run")
+		}
+		if !errors.Is(err, errs.ErrUnavailable) {
+			t.Errorf("StatGate error = %v, want kind unavailable (degraded signal)", err)
 		}
 	})
 }

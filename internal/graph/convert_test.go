@@ -1,7 +1,9 @@
 package graph
 
 import (
+	"fmt"
 	"reflect"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -10,13 +12,23 @@ import (
 
 	"github.com/drakejin/memory-mcp/internal/hotstore"
 	"github.com/drakejin/memory-mcp/internal/knowledge"
-	"github.com/drakejin/memory-mcp/internal/ulid"
 )
 
 var (
 	testKey = hotstore.ProjectKey{Workspace: "drakejin", Team: "infra", Project: "memory-mcp"}
 	testNow = time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
 )
+
+// idSeq backs newID. Fixtures only need ids that satisfy ulid.Valid and differ
+// from one another, so a counter beats real entropy: values stay stable across
+// runs, which keeps failure output readable. Test-only state.
+var idSeq atomic.Int64
+
+// newID mints a unique fixture ULID.
+func newID() string {
+	// 4-char head + 22 digits = the 26 Crockford characters ulid.Valid wants.
+	return fmt.Sprintf("01JD%022d", idSeq.Add(1))
+}
 
 func TestClampDepth(t *testing.T) {
 	tests := []struct {
@@ -43,16 +55,16 @@ func TestClampDepth(t *testing.T) {
 // what Search/Neighborhood read back — the MERGE replay convergence property.
 func TestNodePropsRoundTrip(t *testing.T) {
 	n := knowledge.Node{
-		ID:           ulid.New(),
+		ID:           newID(),
 		Kind:         knowledge.KindFact,
 		Name:         "보안 플러그인은 로컬에서 끈다",
 		Body:         "OpenSearch 로컬 컨테이너는 security off",
 		Aliases:      []string{"security-off", "보안"},
 		State:        knowledge.StateArchived,
 		Trust:        knowledge.TrustUserStated,
-		Supersedes:   []string{ulid.New()},
-		SupersededBy: ulid.New(),
-		Provenance:   []string{ulid.New(), ulid.New()},
+		Supersedes:   []string{newID()},
+		SupersededBy: newID(),
+		Provenance:   []string{newID(), newID()},
 		Created:      testNow,
 		Updated:      testNow.Add(time.Minute),
 		ReviewAfter:  "2026-10-01T00:00:00Z",
@@ -75,7 +87,7 @@ func TestNodePropsRoundTrip(t *testing.T) {
 }
 
 func TestNodePropsZeroTimes(t *testing.T) {
-	n := knowledge.Node{ID: ulid.New(), Kind: knowledge.KindEntity, Name: "x", State: knowledge.StateActive, Trust: knowledge.TrustImported}
+	n := knowledge.Node{ID: newID(), Kind: knowledge.KindEntity, Name: "x", State: knowledge.StateActive, Trust: knowledge.TrustImported}
 	props := nodeProps(testKey, n)
 	if props["created"] != "" || props["updated"] != "" {
 		t.Fatalf("zero times must serialize to empty strings, got %v / %v", props["created"], props["updated"])
@@ -88,10 +100,10 @@ func TestNodePropsZeroTimes(t *testing.T) {
 
 func TestEdgePropsRoundTrip(t *testing.T) {
 	e := knowledge.Edge{
-		From:       ulid.New(),
-		To:         ulid.New(),
+		From:       newID(),
+		To:         newID(),
 		Rel:        knowledge.RelSupersedes,
-		Provenance: []string{ulid.New()},
+		Provenance: []string{newID()},
 		Confidence: 0.87,
 	}
 	props := edgeProps(e)
@@ -111,9 +123,9 @@ func dbNode(elementID string, n knowledge.Node) dbtype.Node {
 }
 
 func TestGraphFromPaths(t *testing.T) {
-	center := knowledge.Node{ID: ulid.New(), Kind: knowledge.KindEntity, Name: "memory-mcp", State: knowledge.StateActive, Trust: knowledge.TrustUserStated}
-	mid := knowledge.Node{ID: ulid.New(), Kind: knowledge.KindFact, Name: "fact-1", State: knowledge.StateActive, Trust: knowledge.TrustAgentInferred}
-	far := knowledge.Node{ID: ulid.New(), Kind: knowledge.KindLesson, Name: "lesson-1", State: knowledge.StateActive, Trust: knowledge.TrustAgentInferred}
+	center := knowledge.Node{ID: newID(), Kind: knowledge.KindEntity, Name: "memory-mcp", State: knowledge.StateActive, Trust: knowledge.TrustUserStated}
+	mid := knowledge.Node{ID: newID(), Kind: knowledge.KindFact, Name: "fact-1", State: knowledge.StateActive, Trust: knowledge.TrustAgentInferred}
+	far := knowledge.Node{ID: newID(), Kind: knowledge.KindLesson, Name: "lesson-1", State: knowledge.StateActive, Trust: knowledge.TrustAgentInferred}
 
 	c, m, f := dbNode("e0", center), dbNode("e1", mid), dbNode("e2", far)
 	relCM := dbtype.Relationship{
@@ -156,7 +168,7 @@ func TestGraphFromPaths(t *testing.T) {
 }
 
 func TestGraphFromPathsCenterOnly(t *testing.T) {
-	center := knowledge.Node{ID: ulid.New(), Kind: knowledge.KindEntity, Name: "solo", State: knowledge.StateActive, Trust: knowledge.TrustImported}
+	center := knowledge.Node{ID: newID(), Kind: knowledge.KindEntity, Name: "solo", State: knowledge.StateActive, Trust: knowledge.TrustImported}
 	g := graphFromPaths(dbNode("e0", center), nil)
 	if len(g.Nodes) != 1 || len(g.Edges) != 0 {
 		t.Fatalf("got %d nodes %d edges, want 1/0", len(g.Nodes), len(g.Edges))
@@ -246,16 +258,53 @@ func TestWithKey(t *testing.T) {
 	}
 }
 
-func TestMapErr(t *testing.T) {
-	if mapErr(nil) != nil {
-		t.Fatal("nil must map to nil")
+func TestRecordListHelpers(t *testing.T) {
+	n := dbNode("e0", knowledge.Node{ID: newID(), Kind: knowledge.KindEntity, Name: "x"})
+	p := dbtype.Path{Nodes: []dbtype.Node{n}}
+
+	tests := []struct {
+		name      string
+		rec       *neo4j.Record
+		key       string
+		wantNodes int
+		wantPaths int
+	}{
+		{"nodes and paths present", &neo4j.Record{
+			Keys:   []string{"list"},
+			Values: []any{[]any{n, p}},
+		}, "list", 1, 1},
+		{"missing key", &neo4j.Record{Keys: []string{"list"}, Values: []any{[]any{n}}}, "other", 0, 0},
+		{"column is not a list", &neo4j.Record{Keys: []string{"list"}, Values: []any{"scalar"}}, "list", 0, 0},
 	}
-	plain := errTest("boom")
-	if got := mapErr(plain); got != plain {
-		t.Fatalf("query errors must pass through, got %v", got)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := len(recordNodes(tt.rec, tt.key)); got != tt.wantNodes {
+				t.Errorf("recordNodes = %d, want %d", got, tt.wantNodes)
+			}
+			if got := len(recordPaths(tt.rec, tt.key)); got != tt.wantPaths {
+				t.Errorf("recordPaths = %d, want %d", got, tt.wantPaths)
+			}
+		})
 	}
 }
 
-type errTest string
-
-func (e errTest) Error() string { return string(e) }
+func TestRecordNode(t *testing.T) {
+	n := dbNode("e0", knowledge.Node{ID: newID(), Kind: knowledge.KindEntity, Name: "x"})
+	tests := []struct {
+		name string
+		rec  *neo4j.Record
+		key  string
+		want bool
+	}{
+		{"present", &neo4j.Record{Keys: []string{"n"}, Values: []any{n}}, "n", true},
+		{"missing key", &neo4j.Record{Keys: []string{"n"}, Values: []any{n}}, "x", false},
+		{"wrong type", &neo4j.Record{Keys: []string{"n"}, Values: []any{"scalar"}}, "n", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, ok := recordNode(tt.rec, tt.key); ok != tt.want {
+				t.Fatalf("recordNode ok = %v, want %v", ok, tt.want)
+			}
+		})
+	}
+}

@@ -3,9 +3,12 @@ package document
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/drakejin/memory-mcp/internal/errs"
 )
 
 // assemblePDF builds a minimal but well-formed PDF from numbered object
@@ -50,7 +53,24 @@ func noTextPDF() []byte {
 	})
 }
 
-func TestDefaultExtractorExtract(t *testing.T) {
+// errReader fails mid-stream, standing in for a truncated upload.
+type errReader struct{}
+
+func (errReader) Read([]byte) (int, error) { return 0, errors.New("stream reset") }
+
+// TestTextExtractorReadFailure: an unreadable upload is a failure, never an
+// empty "unextractable" document — that would silently index nothing.
+func TestTextExtractorReadFailure(t *testing.T) {
+	text, extractable, err := textExtractor{}.Extract(context.Background(), "note.txt", errReader{})
+	if !errors.Is(err, errs.ErrInternal) {
+		t.Fatalf("err = %v, want internal", err)
+	}
+	if text != "" || extractable {
+		t.Errorf("got text=%q extractable=%v, want empty and false", text, extractable)
+	}
+}
+
+func TestTextExtractorExtract(t *testing.T) {
 	ctx := context.Background()
 
 	tests := []struct {
@@ -117,10 +137,19 @@ func TestDefaultExtractorExtract(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			text, extractable, err := DefaultExtractor{}.Extract(ctx, tt.filename, bytes.NewReader(tt.data))
+			text, extractable, err := textExtractor{}.Extract(ctx, tt.filename, bytes.NewReader(tt.data))
 			if tt.wantErr {
 				if err == nil {
 					t.Fatalf("expected error, got text=%q extractable=%v", text, extractable)
+				}
+				// A parse failure is ours to log, not the client's to read:
+				// it must not be reported as invalid input or not-found.
+				if !errors.Is(err, errs.ErrInternal) {
+					t.Fatalf("err = %v, want internal", err)
+				}
+				var domain *errs.Error
+				if errors.As(err, &domain); domain.Op != opExtract {
+					t.Errorf("op = %q, want %q", domain.Op, opExtract)
 				}
 				return
 			}

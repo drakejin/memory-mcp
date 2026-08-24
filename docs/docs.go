@@ -893,6 +893,12 @@ const docTemplate = `{
                         "schema": {
                             "$ref": "#/definitions/server.Envelope"
                         }
+                    },
+                    "409": {
+                        "description": "node is still active — archive or deprecate it first (§3)",
+                        "schema": {
+                            "$ref": "#/definitions/server.Envelope"
+                        }
                     }
                 }
             },
@@ -1070,6 +1076,21 @@ const docTemplate = `{
         }
     },
     "definitions": {
+        "apierr.Error": {
+            "type": "object",
+            "properties": {
+                "code": {
+                    "type": "string"
+                },
+                "details": {
+                    "type": "object",
+                    "additionalProperties": {}
+                },
+                "message": {
+                    "type": "string"
+                }
+            }
+        },
         "consolidate.Candidate": {
             "type": "object",
             "properties": {
@@ -1169,6 +1190,13 @@ const docTemplate = `{
                         "type": "string"
                     }
                 },
+                "degraded": {
+                    "description": "Degraded names every derived plane whose best-effort mirror failed. The\nhot write succeeded regardless (§1), so an ingest that could not index\nits chunks or MERGE its document node still reports 201 — but it says so\nhere rather than claiming a mirror that does not exist (§0 principle 3).",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
                 "extractable": {
                     "description": "Extractable is false when no deterministic text layer exists (e.g.\nscanned PDF); the agent handles such documents itself.",
                     "type": "boolean"
@@ -1182,7 +1210,7 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "truncated": {
-                    "description": "Truncated is non-nil when the 500-chunk cap cut the tail.",
+                    "description": "Truncated is non-nil when the chunk cap cut the tail.",
                     "allOf": [
                         {
                             "$ref": "#/definitions/document.Truncation"
@@ -1244,7 +1272,7 @@ const docTemplate = `{
                     ]
                 },
                 "consolidated": {
-                    "description": "Consolidated marks the record as distilled into knowledge; a\nprecondition for cold archival (§3). Never auto-set by the server.",
+                    "description": "Consolidated marks the record as distilled into knowledge; a\nprecondition for cold archival (§3). Never inferred by the server: it is\nset only where the agent states the distillation itself, by naming this\nrecord in the provenance of a POST .../knowledge/nodes (§3, §0\nprinciple 2).",
                     "type": "boolean"
                 },
                 "entities": {
@@ -1259,7 +1287,7 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "kind": {
-                    "description": "Kind is one of Kinds.",
+                    "description": "Kind is one of the values accepted by ValidKind.",
                     "allOf": [
                         {
                             "$ref": "#/definitions/episodic.Kind"
@@ -1355,6 +1383,7 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "created": {
+                    "description": "Created/Updated marshal as RFC3339 and are stored UTC by the writers.",
                     "type": "string"
                 },
                 "id": {
@@ -1639,7 +1668,7 @@ const docTemplate = `{
             "properties": {
                 "data": {},
                 "error": {
-                    "type": "string"
+                    "$ref": "#/definitions/apierr.Error"
                 },
                 "success": {
                     "type": "boolean"

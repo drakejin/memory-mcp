@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/drakejin/memory-mcp/internal/cold"
 	"github.com/drakejin/memory-mcp/internal/consolidate"
 	"github.com/drakejin/memory-mcp/internal/episodic"
+	"github.com/drakejin/memory-mcp/internal/errs"
 	"github.com/drakejin/memory-mcp/internal/hotstore"
 	"github.com/drakejin/memory-mcp/internal/knowledge"
 	"github.com/drakejin/memory-mcp/internal/rehydrate"
@@ -26,13 +26,13 @@ func staleRec(id string, age time.Duration, consolidated bool) episodic.Record {
 
 func TestStatusReportsUnconsolidatedAndStale(t *testing.T) {
 	store := newFakeStore()
-	ttl := time.Duration(ttlDays()) * 24 * time.Hour
+	ttl := time.Duration(testTTLDays) * 24 * time.Hour
 	store.episodes[testKey.String()] = []episodic.Record{
 		staleRec(ulidA, ttl+48*time.Hour, false), // stale + unconsolidated
 		staleRec(ulidB, time.Hour, false),        // fresh + unconsolidated
 		staleRec(ulidC, ttl+48*time.Hour, true),  // consolidated: not counted
 	}
-	_, h := newTestServer(t, func(d *Deps) { d.Store = store })
+	_, h := newTestServer(t, func(d *Config) { d.Store = store })
 
 	rec := do(t, h, http.MethodGet, "/v1/status", nil)
 	assertStatus(t, rec, http.StatusOK)
@@ -47,19 +47,16 @@ func TestStatusReportsUnconsolidatedAndStale(t *testing.T) {
 	}
 }
 
-// ttlDays mirrors the TTL testConfig hands the server.
-func ttlDays() int { return testConfig().EpisodicTTLDays }
-
 func TestStatusReportsDirtyFilesSorted(t *testing.T) {
 	store := newFakeStore()
 	other := hotstore.ProjectKey{Workspace: "ws", Team: "team", Project: "alpha"}
 	store.manifest.Files = map[string]hotstore.FileState{
-		rehydrate.FileKey(hotstore.PlaneKnowledge, testKey): {Dirty: true},
-		rehydrate.FileKey(hotstore.PlaneEpisodic, other):    {Dirty: true},
-		rehydrate.FileKey(hotstore.PlaneEpisodic, testKey):  {Dirty: false},
+		hotstore.ManifestFileKey(hotstore.PlaneKnowledge, testKey): {Dirty: true},
+		hotstore.ManifestFileKey(hotstore.PlaneEpisodic, other):    {Dirty: true},
+		hotstore.ManifestFileKey(hotstore.PlaneEpisodic, testKey):  {Dirty: false},
 	}
 	store.manifest.UpdatedAt = fixedNow.Add(-time.Minute)
-	_, h := newTestServer(t, func(d *Deps) { d.Store = store })
+	_, h := newTestServer(t, func(d *Config) { d.Store = store })
 
 	rec := do(t, h, http.MethodGet, "/v1/status", nil)
 	assertStatus(t, rec, http.StatusOK)
@@ -67,8 +64,8 @@ func TestStatusReportsDirtyFilesSorted(t *testing.T) {
 	var got StatusReport
 	decodeEnvelope(t, rec, &got)
 	want := []string{
-		rehydrate.FileKey(hotstore.PlaneEpisodic, other),
-		rehydrate.FileKey(hotstore.PlaneKnowledge, testKey),
+		hotstore.ManifestFileKey(hotstore.PlaneEpisodic, other),
+		hotstore.ManifestFileKey(hotstore.PlaneKnowledge, testKey),
 	}
 	if len(got.DirtyFiles) != len(want) {
 		t.Fatalf("dirty_files = %v, want %v", got.DirtyFiles, want)
@@ -86,14 +83,14 @@ func TestStatusReportsDirtyFilesSorted(t *testing.T) {
 func TestStatusReportsDrift(t *testing.T) {
 	tests := []struct {
 		name         string
-		mutate       func(*Deps)
+		mutate       func(*Config)
 		wantEpiUnav  bool
 		wantKnUnav   bool
 		wantDegraded []string
 	}{
 		{
 			name: "both healthy",
-			mutate: func(d *Deps) {
+			mutate: func(d *Config) {
 				d.Rehydrator = &fakeRehydrator{}
 				d.Archiver = reachableArchiver()
 			},
@@ -101,7 +98,7 @@ func TestStatusReportsDrift(t *testing.T) {
 		},
 		{
 			name: "episodic unavailable",
-			mutate: func(d *Deps) {
+			mutate: func(d *Config) {
 				d.Rehydrator = &fakeRehydrator{drift: rehydrate.DriftReport{
 					Episodic: rehydrate.Drift{Unavailable: true, Reason: "opensearch unreachable"},
 				}}
@@ -112,7 +109,7 @@ func TestStatusReportsDrift(t *testing.T) {
 		},
 		{
 			name: "rehydrator absent marks both unavailable",
-			mutate: func(d *Deps) {
+			mutate: func(d *Config) {
 				d.Rehydrator = nil
 				d.Archiver = reachableArchiver()
 			},
@@ -122,7 +119,7 @@ func TestStatusReportsDrift(t *testing.T) {
 		},
 		{
 			name: "drift check failure is reported, not hidden",
-			mutate: func(d *Deps) {
+			mutate: func(d *Config) {
 				d.Rehydrator = &fakeRehydrator{driftErr: errBoom}
 				d.Archiver = reachableArchiver()
 			},
@@ -132,7 +129,7 @@ func TestStatusReportsDrift(t *testing.T) {
 		},
 		{
 			name: "cold unreachable",
-			mutate: func(d *Deps) {
+			mutate: func(d *Config) {
 				d.Rehydrator = &fakeRehydrator{}
 				d.Archiver = nil
 			},
@@ -166,16 +163,15 @@ func TestStatusReportsDrift(t *testing.T) {
 	}
 }
 
-// reachableArchiver is a cold.Archiver whose existence probe succeeds.
+// reachableArchiver is a ColdArchive whose probe answers not-found rather than
+// erroring — i.e. the bucket is live and simply does not hold the probe key.
 func reachableArchiver() *fakeArchiver {
-	ar := newFakeArchiver()
-	ar.exists = false // probe answers false without erroring => reachable
-	return ar
+	return newFakeArchiver()
 }
 
 func TestStatusS3Sync(t *testing.T) {
 	ar := reachableArchiver()
-	_, h := newTestServer(t, func(d *Deps) { d.Archiver = ar })
+	_, h := newTestServer(t, func(d *Config) { d.Archiver = ar })
 
 	rec := do(t, h, http.MethodGet, "/v1/status", nil)
 	assertStatus(t, rec, http.StatusOK)
@@ -184,8 +180,8 @@ func TestStatusS3Sync(t *testing.T) {
 	if !got.S3.Reachable {
 		t.Error("s3 must report reachable when the probe returns without error")
 	}
-	if got.S3.Bucket != testConfig().S3Bucket {
-		t.Errorf("bucket = %q, want %q", got.S3.Bucket, testConfig().S3Bucket)
+	if got.S3.Bucket != testS3Bucket {
+		t.Errorf("bucket = %q, want %q", got.S3.Bucket, testS3Bucket)
 	}
 	if !got.S3.LastArchiveAt.IsZero() || !got.S3.LastSnapshotAt.IsZero() {
 		t.Error("archive/snapshot timestamps must stay zero until a consolidation writes cold")
@@ -206,7 +202,7 @@ func TestStatusS3Reachability(t *testing.T) {
 	}{
 		{
 			name:          "bucket live, probe key absent",
-			blobErr:       cold.ErrNotFound,
+			blobErr:       errs.NotFound("cold.FetchBlob", "blob", emptySHA256),
 			wantReachable: true,
 		},
 		{
@@ -227,7 +223,7 @@ func TestStatusS3Reachability(t *testing.T) {
 			// Arrange
 			ar := newFakeArchiver()
 			ar.blobErr = tt.blobErr
-			_, h := newTestServer(t, func(d *Deps) { d.Archiver = ar })
+			_, h := newTestServer(t, func(d *Config) { d.Archiver = ar })
 
 			// Act
 			rec := do(t, h, http.MethodGet, "/v1/status", nil)
@@ -261,7 +257,7 @@ func TestStatusListingFailureIsReportedNotFatal(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			store := newFakeStore()
 			tc.mutate(store)
-			_, h := newTestServer(t, func(d *Deps) { d.Store = store })
+			_, h := newTestServer(t, func(d *Config) { d.Store = store })
 			rec := do(t, h, http.MethodGet, "/v1/status", nil)
 			// /status must always answer; the gap shows up in degraded.
 			assertStatus(t, rec, http.StatusOK)
@@ -277,13 +273,13 @@ func TestStatusListingFailureIsReportedNotFatal(t *testing.T) {
 func TestStatusManifestFailureIs500(t *testing.T) {
 	store := newFakeStore()
 	store.manifestErr = errBoom
-	_, h := newTestServer(t, func(d *Deps) { d.Store = store })
+	_, h := newTestServer(t, func(d *Config) { d.Store = store })
 	rec := do(t, h, http.MethodGet, "/v1/status", nil)
 	assertStatus(t, rec, http.StatusInternalServerError)
 }
 
 func TestStatusWithoutHotStoreIs503(t *testing.T) {
-	_, h := newTestServer(t, func(d *Deps) { d.Store = nil })
+	_, h := newTestServer(t, func(d *Config) { d.Store = nil })
 	rec := do(t, h, http.MethodGet, "/v1/status", nil)
 	assertStatus(t, rec, http.StatusServiceUnavailable)
 }
@@ -310,7 +306,7 @@ func TestConsolidateProjectSelectors(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			cons := &fakeConsolidator{}
-			_, h := newTestServer(t, func(d *Deps) { d.Consolidator = cons })
+			_, h := newTestServer(t, func(d *Config) { d.Consolidator = cons })
 			rec := do(t, h, http.MethodPost, "/v1/consolidate", tc.body)
 			assertStatus(t, rec, tc.status)
 			if tc.status != http.StatusOK {
@@ -342,7 +338,7 @@ func TestConsolidateRecordsS3Activity(t *testing.T) {
 		Failures:      []string{},
 	}}
 	ar := reachableArchiver()
-	_, h := newTestServer(t, func(d *Deps) {
+	_, h := newTestServer(t, func(d *Config) {
 		d.Consolidator = cons
 		d.Archiver = ar
 	})
@@ -371,11 +367,11 @@ func TestConsolidateRecordsS3Activity(t *testing.T) {
 func TestConsolidateFailures(t *testing.T) {
 	tests := []struct {
 		name   string
-		mutate func(*Deps)
+		mutate func(*Config)
 		status int
 	}{
-		{"consolidator absent", func(d *Deps) { d.Consolidator = nil }, http.StatusServiceUnavailable},
-		{"run fails", func(d *Deps) { d.Consolidator = &fakeConsolidator{err: errBoom} }, http.StatusInternalServerError},
+		{"consolidator absent", func(d *Config) { d.Consolidator = nil }, http.StatusServiceUnavailable},
+		{"run fails", func(d *Config) { d.Consolidator = &fakeConsolidator{err: errBoom} }, http.StatusInternalServerError},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -399,7 +395,7 @@ func TestReindex(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			reh := &fakeRehydrator{report: rehydrate.Report{EpisodesIndexed: 7, NodesUpserted: 2, Failures: []string{}}}
-			_, h := newTestServer(t, func(d *Deps) { d.Rehydrator = reh })
+			_, h := newTestServer(t, func(d *Config) { d.Rehydrator = reh })
 			rec := do(t, h, http.MethodPost, tc.target, nil)
 			assertStatus(t, rec, http.StatusOK)
 
@@ -421,11 +417,11 @@ func TestReindex(t *testing.T) {
 func TestReindexFailures(t *testing.T) {
 	tests := []struct {
 		name   string
-		mutate func(*Deps)
+		mutate func(*Config)
 		status int
 	}{
-		{"rehydrator absent", func(d *Deps) { d.Rehydrator = nil }, http.StatusServiceUnavailable},
-		{"rehydration fails", func(d *Deps) { d.Rehydrator = &fakeRehydrator{allErr: errBoom} }, http.StatusInternalServerError},
+		{"rehydrator absent", func(d *Config) { d.Rehydrator = nil }, http.StatusServiceUnavailable},
+		{"rehydration fails", func(d *Config) { d.Rehydrator = &fakeRehydrator{allErr: errBoom} }, http.StatusInternalServerError},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -481,7 +477,7 @@ func TestStartupRehydratesOnlyOnDrift(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			srv, _ := newTestServer(t, func(d *Deps) { d.Rehydrator = tc.reh })
+			srv, _ := newTestServer(t, func(d *Config) { d.Rehydrator = tc.reh })
 			srv.Startup(t.Context())
 			if tc.reh.allCalls != tc.wantCall {
 				t.Fatalf("RehydrateAll calls = %d, want %d", tc.reh.allCalls, tc.wantCall)
@@ -496,7 +492,7 @@ func TestStartupRehydratesOnlyOnDrift(t *testing.T) {
 func TestStartupToleratesFailures(t *testing.T) {
 	// A boot with dead derived stores must not panic or block; degradation is
 	// reported by /status instead (§5).
-	srv, _ := newTestServer(t, func(d *Deps) {
+	srv, _ := newTestServer(t, func(d *Config) {
 		d.Rehydrator = &fakeRehydrator{
 			drift:  rehydrate.DriftReport{Episodic: rehydrate.Drift{Detected: true}},
 			allErr: errBoom,
@@ -504,7 +500,7 @@ func TestStartupToleratesFailures(t *testing.T) {
 	})
 	srv.Startup(t.Context())
 
-	srv2, _ := newTestServer(t, func(d *Deps) { d.Rehydrator = nil })
+	srv2, _ := newTestServer(t, func(d *Config) { d.Rehydrator = nil })
 	srv2.Startup(t.Context())
 }
 
@@ -513,7 +509,7 @@ func TestStartupLogsPartialFailures(t *testing.T) {
 		drift:  rehydrate.DriftReport{Knowledge: rehydrate.Drift{Detected: true}},
 		report: rehydrate.Report{NodesUpserted: 1, Failures: []string{"knowledge ws/team/proj: upsert: boom"}},
 	}
-	srv, _ := newTestServer(t, func(d *Deps) { d.Rehydrator = reh })
+	srv, _ := newTestServer(t, func(d *Config) { d.Rehydrator = reh })
 	srv.Startup(t.Context())
 	if reh.allCalls != 1 {
 		t.Fatalf("RehydrateAll calls = %d, want 1", reh.allCalls)
@@ -526,7 +522,7 @@ func TestStatusCountsAcrossProjects(t *testing.T) {
 	store.episodes[testKey.String()] = []episodic.Record{staleRec(ulidA, time.Hour, false)}
 	store.episodes[other.String()] = []episodic.Record{staleRec(ulidB, time.Hour, false)}
 	store.graphs[other.String()] = knowledge.Graph{}
-	_, h := newTestServer(t, func(d *Deps) { d.Store = store })
+	_, h := newTestServer(t, func(d *Config) { d.Store = store })
 
 	rec := do(t, h, http.MethodGet, "/v1/status", nil)
 	assertStatus(t, rec, http.StatusOK)

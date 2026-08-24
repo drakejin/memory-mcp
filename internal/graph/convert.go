@@ -1,11 +1,16 @@
 package graph
 
+// This file converts between driver values and domain values: node/edge
+// properties in both directions, record extraction, and the traversal →
+// knowledge.Graph fold.
+
 import (
 	"fmt"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/neo4j/neo4j-go-driver/v5/neo4j"
 	"github.com/neo4j/neo4j-go-driver/v5/neo4j/dbtype"
 
 	"github.com/drakejin/memory-mcp/internal/hotstore"
@@ -150,6 +155,83 @@ func sortChainOldestFirst(nodes []knowledge.Node) []knowledge.Node {
 		return out[i].ID < out[j].ID
 	})
 	return out
+}
+
+// withKey merges the project-scope parameters into params and returns it.
+func withKey(key hotstore.ProjectKey, params map[string]any) map[string]any {
+	if params == nil {
+		params = map[string]any{}
+	}
+	params["ws"] = key.Workspace
+	params["team"] = key.Team
+	params["proj"] = key.Project
+	return params
+}
+
+// recordNode extracts a dbtype.Node value from a record by key.
+func recordNode(rec *neo4j.Record, key string) (dbtype.Node, bool) {
+	v, ok := rec.Get(key)
+	if !ok {
+		return dbtype.Node{}, false
+	}
+	n, ok := v.(dbtype.Node)
+	return n, ok
+}
+
+// recordNodes extracts a list of dbtype.Node values from a record by key.
+func recordNodes(rec *neo4j.Record, key string) []dbtype.Node {
+	list, ok := recordList(rec, key)
+	if !ok {
+		return nil
+	}
+	out := make([]dbtype.Node, 0, len(list))
+	for _, item := range list {
+		if n, ok := item.(dbtype.Node); ok {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+// recordPaths extracts a list of dbtype.Path values from a record by key.
+func recordPaths(rec *neo4j.Record, key string) []dbtype.Path {
+	list, ok := recordList(rec, key)
+	if !ok {
+		return nil
+	}
+	out := make([]dbtype.Path, 0, len(list))
+	for _, item := range list {
+		if p, ok := item.(dbtype.Path); ok {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// recordList extracts an untyped list column from a record by key.
+func recordList(rec *neo4j.Record, key string) ([]any, bool) {
+	v, ok := rec.Get(key)
+	if !ok {
+		return nil, false
+	}
+	list, ok := v.([]any)
+	return list, ok
+}
+
+// singleInt reads an integer column from the first record, defaulting to 0.
+func singleInt(records []*neo4j.Record, key string) int {
+	if len(records) == 0 {
+		return 0
+	}
+	v, ok := records[0].Get(key)
+	if !ok {
+		return 0
+	}
+	n, ok := v.(int64)
+	if !ok {
+		return 0
+	}
+	return int(n)
 }
 
 func toAnySlice(in []string) []any {

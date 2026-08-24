@@ -1,15 +1,13 @@
 package server
 
 import (
-	"errors"
 	"io"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/drakejin/memory-mcp/internal/cold"
 	"github.com/drakejin/memory-mcp/internal/episodic"
-	"github.com/drakejin/memory-mcp/internal/hotstore"
+	"github.com/drakejin/memory-mcp/internal/server/apierr"
 )
 
 // handleIngestDocument godoc
@@ -27,48 +25,47 @@ import (
 //	@Failure	503		{object}	Envelope	"document pipeline unavailable"
 //	@Router		/v1/{ws}/{team}/{proj}/documents [post]
 //
-// Contract: §6 pipeline via document.Service.Ingest. S3 blob upload is
-// cold-first and must succeed; extraction/chunking failures are reported
-// honestly (extractable=false, truncated), never guessed around.
+// Contract: the §6 pipeline. S3 blob upload is cold-first and must succeed;
+// extraction/chunking shortfalls are reported honestly (extractable=false,
+// truncated), never guessed around.
 func (s *Server) handleIngestDocument(w http.ResponseWriter, r *http.Request) {
 	key := projectKey(r)
-	if err := validateProjectKey(key); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+	if apiErr := validateProjectKey(key); apiErr != nil {
+		writeAPIError(w, s.log, apiErr)
 		return
 	}
-	if s.deps.Documents == nil {
-		writeError(w, http.StatusServiceUnavailable, "document pipeline unavailable")
+	if s.documents == nil {
+		writeAPIError(w, s.log, unavailable(msgDocumentsUnavailable))
 		return
 	}
-	if s.deps.Archiver == nil {
+	if s.archiver == nil {
 		// §6 step 2 is cold-first: without S3 the ingest contract cannot hold.
-		writeError(w, http.StatusServiceUnavailable, degradedCold)
+		writeAPIError(w, s.log, unavailable(degradedCold))
 		return
 	}
 
 	r.Body = http.MaxBytesReader(w, r.Body, maxUploadBytes)
 	if err := r.ParseMultipartForm(multipartMemoryBytes); err != nil {
-		writeError(w, http.StatusBadRequest, "multipart form unreadable or too large")
+		writeAPIError(w, s.log, badRequest("multipart form unreadable or too large"))
 		return
 	}
-	file, header, err := r.FormFile("file")
+	file, header, err := r.FormFile(formFieldFile)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, `multipart field "file" is required`)
+		writeAPIError(w, s.log, badRequest(`multipart field "`+formFieldFile+`" is required`))
 		return
 	}
 	defer file.Close()
 	if header.Filename == "" {
-		writeError(w, http.StatusBadRequest, "uploaded file must have a filename")
+		writeAPIError(w, s.log, badRequest("uploaded file must have a filename"))
 		return
 	}
 
-	res, err := s.deps.Documents.Ingest(r.Context(), key, header.Filename, file)
+	res, err := s.documents.Ingest(r.Context(), key, header.Filename, file)
 	if err != nil {
-		s.deps.Logger.Error("document ingest failed", "project", key.String(), "filename", header.Filename, "error", err)
-		writeError(w, http.StatusInternalServerError, "document ingest failed")
+		writeAPIError(w, s.log, apierr.From(err))
 		return
 	}
-	writeJSON(w, http.StatusCreated, res)
+	writeJSON(w, s.log, http.StatusCreated, res)
 }
 
 // handleGetDocument godoc
@@ -85,31 +82,26 @@ func (s *Server) handleIngestDocument(w http.ResponseWriter, r *http.Request) {
 // Contract: local blob cache first, S3 rehydrate on miss (§6 step 6). This is
 // the one endpoint that streams raw bytes instead of the JSON envelope.
 func (s *Server) handleGetDocument(w http.ResponseWriter, r *http.Request) {
-	sha := chi.URLParam(r, "sha")
-	if err := validateSHA(sha); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+	sha := chi.URLParam(r, paramSHA)
+	if apiErr := validateSHA(sha); apiErr != nil {
+		writeAPIError(w, s.log, apiErr)
 		return
 	}
-	if s.deps.Documents == nil {
-		writeError(w, http.StatusServiceUnavailable, "document pipeline unavailable")
+	if s.documents == nil {
+		writeAPIError(w, s.log, unavailable(msgDocumentsUnavailable))
 		return
 	}
-	rc, err := s.deps.Documents.Original(r.Context(), sha)
-	if errors.Is(err, hotstore.ErrNotFound) || errors.Is(err, cold.ErrNotFound) {
-		writeError(w, http.StatusNotFound, "document not found")
-		return
-	}
+	rc, err := s.documents.Original(r.Context(), sha)
 	if err != nil {
-		s.deps.Logger.Error("document fetch failed", "sha", sha, "error", err)
-		writeError(w, http.StatusInternalServerError, "document fetch failed")
+		writeAPIError(w, s.log, apierr.From(err))
 		return
 	}
 	defer rc.Close()
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.WriteHeader(http.StatusOK)
 	if _, err := io.Copy(w, rc); err != nil {
-		// Headers already sent; log only.
-		s.deps.Logger.Warn("document stream interrupted", "sha", sha, "error", err)
+		// Headers already sent; the envelope is no longer available.
+		s.log.Warn("document stream interrupted", "sha", sha, "error", err)
 	}
 }
 
@@ -124,27 +116,22 @@ func (s *Server) handleGetDocument(w http.ResponseWriter, r *http.Request) {
 //	@Failure	404	{object}	Envelope
 //	@Router		/v1/documents/{sha}/chunks [get]
 func (s *Server) handleGetDocumentChunks(w http.ResponseWriter, r *http.Request) {
-	sha := chi.URLParam(r, "sha")
-	if err := validateSHA(sha); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+	sha := chi.URLParam(r, paramSHA)
+	if apiErr := validateSHA(sha); apiErr != nil {
+		writeAPIError(w, s.log, apiErr)
 		return
 	}
-	if s.deps.Documents == nil {
-		writeError(w, http.StatusServiceUnavailable, "document pipeline unavailable")
+	if s.documents == nil {
+		writeAPIError(w, s.log, unavailable(msgDocumentsUnavailable))
 		return
 	}
-	chunks, err := s.deps.Documents.Chunks(r.Context(), sha)
-	if errors.Is(err, hotstore.ErrNotFound) {
-		writeError(w, http.StatusNotFound, "document not found")
-		return
-	}
+	chunks, err := s.documents.Chunks(r.Context(), sha)
 	if err != nil {
-		s.deps.Logger.Error("document chunk listing failed", "sha", sha, "error", err)
-		writeError(w, http.StatusInternalServerError, "document chunk listing failed")
+		writeAPIError(w, s.log, apierr.From(err))
 		return
 	}
 	if chunks == nil {
 		chunks = []episodic.Record{}
 	}
-	writeJSON(w, http.StatusOK, chunks)
+	writeJSON(w, s.log, http.StatusOK, chunks)
 }

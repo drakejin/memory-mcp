@@ -45,7 +45,7 @@ hot 쓰기  ──실패──► 5xx, 요청 실패                       (정�
 ```
 
 - `handleCreateEpisode`: `Store.AppendEpisode` 실패 → `500 failed to persist episode`. 그 뒤의 `Index.IndexRecords` 실패 → **여전히 201**, 응답에 `degraded:["search unavailable"]`, `markDirty(PlaneEpisodic)`.
-- `handleCreateNode`: `Store.WriteKnowledge` 실패 → 500. `mirrorKnowledge`의 Neo4j MERGE 실패 → 201 + `degraded:["graph unavailable"]` + `markDirty(PlaneKnowledge)`.
+- `handleCreateNode`: `Store.UpdateKnowledge` 실패 → 500. `mirrorKnowledge`의 Neo4j MERGE 실패 → 201 + `degraded:["graph unavailable"]` + `markDirty(PlaneKnowledge)`.
 - `consolidate.Runner.ageProject`: `archiver.ArchiveEpisodes` → `store.RemoveEpisodes` → `index.DeleteRecords` 순서를 지킨다. S3 put이 실패하면 hot은 건드리지 않고 `Report.Failures`에만 남긴다. 반대로 hot 삭제가 실패해도 콜드 사본은 이미 존재하므로(안전한 방향) 다음 실행이 멱등하게 재아카이브한다.
 
 ## 3. 두 메모리 평면

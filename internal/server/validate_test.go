@@ -2,6 +2,8 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -9,7 +11,9 @@ import (
 	"time"
 
 	"github.com/drakejin/memory-mcp/internal/episodic"
+	"github.com/drakejin/memory-mcp/internal/errs"
 	"github.com/drakejin/memory-mcp/internal/hotstore"
+	"github.com/drakejin/memory-mcp/internal/server/apierr"
 
 	// The swag-generated spec registers itself in an init; without it
 	// /swagger/doc.json answers 500 in the test binary.
@@ -165,7 +169,10 @@ func TestParseKindsParam(t *testing.T) {
 		{"single", "event", []episodic.Kind{episodic.KindEvent}, false},
 		{"multiple with spaces", "event, decision ", []episodic.Kind{episodic.KindEvent, episodic.KindDecision}, false},
 		{"blank entries skipped", "event,,decision", []episodic.Kind{episodic.KindEvent, episodic.KindDecision}, false},
-		{"all kinds", "event,conversation,decision,observation,document_chunk", episodic.Kinds, false},
+		{"all kinds", "event,conversation,decision,observation,document_chunk", []episodic.Kind{
+			episodic.KindEvent, episodic.KindConversation, episodic.KindDecision,
+			episodic.KindObservation, episodic.KindDocumentChunk,
+		}, false},
 		{"unknown", "event,rumor", nil, true},
 	}
 	for _, tc := range tests {
@@ -272,30 +279,81 @@ func TestDecodeJSONBodyLimits(t *testing.T) {
 }
 
 func TestEnvelopeShape(t *testing.T) {
+	quiet := slog.New(slog.DiscardHandler)
+	// A cause that must stay in the log and out of every response body.
+	secret := errs.Unavailable("search.Search", errors.New("opensearch said: index_not_found_exception at /var/lib/opensearch"))
+
 	tests := []struct {
 		name        string
 		write       func(w http.ResponseWriter)
 		wantStatus  int
 		wantSuccess bool
-		wantError   string
+		wantCode    string
+		wantMessage string
 	}{
 		{
 			name:        "success",
-			write:       func(w http.ResponseWriter) { writeJSON(w, http.StatusOK, map[string]int{"n": 1}) },
+			write:       func(w http.ResponseWriter) { writeJSON(w, quiet, http.StatusOK, map[string]int{"n": 1}) },
 			wantStatus:  http.StatusOK,
 			wantSuccess: true,
 		},
 		{
-			name:       "failure",
-			write:      func(w http.ResponseWriter) { writeError(w, http.StatusBadRequest, "nope") },
-			wantStatus: http.StatusBadRequest,
-			wantError:  "nope",
+			name:        "a transport-only rejection",
+			write:       func(w http.ResponseWriter) { writeAPIError(w, quiet, badRequest("nope")) },
+			wantStatus:  http.StatusBadRequest,
+			wantCode:    apierr.CodeInvalidRequest,
+			wantMessage: "nope",
 		},
 		{
-			name:       "not implemented",
-			write:      func(w http.ResponseWriter) { notImplemented(w) },
-			wantStatus: http.StatusNotImplemented,
-			wantError:  "not implemented",
+			name:        "an absent collaborator is 503, not 500",
+			write:       func(w http.ResponseWriter) { writeAPIError(w, quiet, unavailable(degradedSearch)) },
+			wantStatus:  http.StatusServiceUnavailable,
+			wantCode:    apierr.CodeUnavailable,
+			wantMessage: degradedSearch,
+		},
+		{
+			name:        "a transport-resolved miss is 404",
+			write:       func(w http.ResponseWriter) { writeAPIError(w, quiet, notFound("node not found")) },
+			wantStatus:  http.StatusNotFound,
+			wantCode:    apierr.CodeNotFound,
+			wantMessage: "node not found",
+		},
+		{
+			name: "domain failure crosses the apierr boundary",
+			write: func(w http.ResponseWriter) {
+				writeAPIError(w, quiet, apierr.From(errs.NotFound("hotstore.ReadEpisode", "episode", "01JD")))
+			},
+			wantStatus:  http.StatusNotFound,
+			wantCode:    apierr.CodeNotFound,
+			wantMessage: "episode not found",
+		},
+		{
+			name:        "cause stays out of the body",
+			write:       func(w http.ResponseWriter) { writeAPIError(w, quiet, apierr.From(secret)) },
+			wantStatus:  http.StatusServiceUnavailable,
+			wantCode:    apierr.CodeUnavailable,
+			wantMessage: "service unavailable",
+		},
+		{
+			name:        "an unclassified failure never leaks its cause",
+			write:       func(w http.ResponseWriter) { writeAPIError(w, quiet, apierr.From(errBoom)) },
+			wantStatus:  http.StatusInternalServerError,
+			wantCode:    apierr.CodeInternal,
+			wantMessage: msgInternal,
+		},
+		{
+			name:        "a nil transport error still answers",
+			write:       func(w http.ResponseWriter) { writeAPIError(w, quiet, nil) },
+			wantStatus:  http.StatusInternalServerError,
+			wantCode:    apierr.CodeInternal,
+			wantMessage: msgInternal,
+		},
+		{
+			name:        "a nil logger does not panic on the response path",
+			write:       func(w http.ResponseWriter) { writeAPIError(w, nil, badRequest("nope")) },
+			wantStatus:  http.StatusBadRequest,
+			wantCode:    apierr.CodeInvalidRequest,
+			wantMessage: "nope",
 		},
 	}
 
@@ -309,6 +367,9 @@ func TestEnvelopeShape(t *testing.T) {
 			if ct := w.Header().Get("Content-Type"); ct != "application/json" {
 				t.Errorf("content-type = %q, want application/json", ct)
 			}
+			if strings.Contains(w.Body.String(), "opensearch said") {
+				t.Errorf("body %s leaks the cause", w.Body.String())
+			}
 			var env Envelope
 			if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil {
 				t.Fatalf("body is not an envelope: %v", err)
@@ -316,23 +377,88 @@ func TestEnvelopeShape(t *testing.T) {
 			if env.Success != tc.wantSuccess {
 				t.Errorf("success = %v, want %v", env.Success, tc.wantSuccess)
 			}
-			if env.Error != tc.wantError {
-				t.Errorf("error = %q, want %q", env.Error, tc.wantError)
+			if tc.wantCode == "" {
+				if env.Error != nil {
+					t.Errorf("error = %+v, want it omitted on success", env.Error)
+				}
+				return
+			}
+			if env.Error == nil {
+				t.Fatalf("failure envelope carries no error object: %s", w.Body.String())
+			}
+			if env.Error.Code != tc.wantCode {
+				t.Errorf("error.code = %q, want %q", env.Error.Code, tc.wantCode)
+			}
+			if env.Error.Message != tc.wantMessage {
+				t.Errorf("error.message = %q, want %q", env.Error.Message, tc.wantMessage)
 			}
 		})
 	}
 }
 
-func TestNewAppliesDefaults(t *testing.T) {
-	srv := New(testConfig(), Deps{Store: newFakeStore()})
-	if srv.deps.Logger == nil {
-		t.Error("Logger must default to slog.Default()")
+// TestNewRejectsUnservableConfig pins the constructor contract: the intrinsic
+// dependencies must be present, and the §7 trust boundary ("no auth is safe
+// because it is not reachable") is enforced here too, not only in config.Load.
+// A derived store is deliberately not required — §5 says a dead one degrades
+// the server rather than stopping it.
+func TestNewRejectsUnservableConfig(t *testing.T) {
+	base := func() Config {
+		return Config{
+			ListenAddr:      testListenAddr,
+			S3Bucket:        testS3Bucket,
+			EpisodicTTLDays: testTTLDays,
+			Clock:           fakeClock{now: fixedNow},
+			IDs:             &fakeIDs{},
+			Logger:          discardLogger(),
+		}
 	}
-	if srv.deps.Clock == nil {
-		t.Error("Clock must default to SystemClock")
+
+	tests := []struct {
+		name    string
+		mutate  func(*Config)
+		wantErr bool
+	}{
+		{"loopback ip", nil, false},
+		{"localhost name", func(c *Config) { c.ListenAddr = "localhost:8420" }, false},
+		{"every derived store absent is legal", func(c *Config) { c.Store, c.Index, c.Graph = nil, nil, nil }, false},
+		{"all interfaces bound", func(c *Config) {
+			c.Store, c.Index, c.Graph = newFakeStore(), newFakeIndex(), newFakeGraph()
+		}, false},
+		{"empty listen addr", func(c *Config) { c.ListenAddr = "" }, true},
+		{"wildcard bind", func(c *Config) { c.ListenAddr = "0.0.0.0:8420" }, true},
+		{"routable bind", func(c *Config) { c.ListenAddr = "192.168.0.10:8420" }, true},
+		{"zero ttl", func(c *Config) { c.EpisodicTTLDays = 0 }, true},
+		{"negative ttl", func(c *Config) { c.EpisodicTTLDays = -1 }, true},
+		{"no clock", func(c *Config) { c.Clock = nil }, true},
+		{"no id generator", func(c *Config) { c.IDs = nil }, true},
+		{"no logger", func(c *Config) { c.Logger = nil }, true},
 	}
-	if _, ok := srv.deps.Clock.(hotstore.SystemClock); !ok {
-		t.Errorf("Clock = %T, want hotstore.SystemClock", srv.deps.Clock)
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := base()
+			if tc.mutate != nil {
+				tc.mutate(&cfg)
+			}
+			srv, err := New(cfg)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("New error = %v, wantErr %v", err, tc.wantErr)
+			}
+			if tc.wantErr {
+				if srv != nil {
+					t.Error("a rejected config must not yield a server")
+				}
+				// A constructor is below the transport boundary, so it speaks
+				// the domain vocabulary (§2.1), not HTTP.
+				if !errors.Is(err, errs.ErrInvalid) {
+					t.Errorf("error = %v, want errs.ErrInvalid", err)
+				}
+				return
+			}
+			if srv == nil {
+				t.Fatal("New returned no server and no error")
+			}
+		})
 	}
 }
 

@@ -91,13 +91,12 @@ HTTP 계층에서 한 번 더 막는다 — `internal/server/handlers_knowledge.
 |---|---|
 | 게이트 | `confirm != "true"`면 **400** — `"purge requires confirm=true (§3 — S3 versioning is the backstop)"` |
 | id 검증 | ULID 아니면 400, hot 그래프에 없으면 404 |
-| hot 쓰기 | 노드 제거 + **인접 엣지 전부 제거**(`e.From == id || e.To == id`), `WriteKnowledge`로 원자 교체 |
+| 생명주기 게이트 | `knowledge.CanPurge`가 거부하면 **409** — `"purge requires state archived or deprecated — archive or deprecate the node first"`. §3의 완충층을 건너뛰는 직접 삭제는 없다 |
+| hot 쓰기 | `knowledge.Purge`가 노드 제거 + **인접 엣지 전부 제거**(`e.From == id || e.To == id`) + **매달린 참조 복구**(다른 노드의 `superseded_by`·`supersedes`에서 해당 id 제거), `UpdateKnowledge` 클로저 안에서 원자 교체 — 조회·게이트·제거가 같은 락 안에 있다 |
 | 파생물 | `Graph.DeleteNode` best-effort — 실패하면 `degraded: ["graph unavailable"]` + manifest dirty 마크 |
 | 응답 | `PurgeNodeResponse{purged_id, removed_edges, degraded}` |
 
-purge는 hot에서만 지운다. 백스톱은 S3 — 버킷 versioning과 consolidation이 남긴 `knowledge/.../latest.json`·`snapshots/{ts}.json`이다. 단, **직전 스냅샷 이후 생성된 노드를 purge하면 복구본이 없다.**
-
-> **주의**: `knowledge.CanPurge`(archived/deprecated에서만 purge 허용)는 정의만 되어 있고 **아무도 호출하지 않는다.** 실제로는 `active` 노드도 `confirm=true`만 있으면 즉시 purge된다 (§8-2).
+purge는 hot에서만 지운다. 백스톱은 S3 — 버킷 versioning과 consolidation이 남긴 `knowledge/.../latest.json`·`snapshots/{ts}.json`이다. 스냅샷이 없는 갓 만든 노드가 사라지는 일은 생명주기 게이트가 막는다: purge하려면 먼저 `archived`나 `deprecated`로 전이해야 하고, 그 전이 자체가 에이전트의 명시적 판정이다.
 
 ### 2.5 상태가 읽기에 미치는 영향
 
@@ -228,7 +227,7 @@ if maxBytes > 0 && fileBytes > maxBytes && len(recs) > 0:
 | | 서버 (결정적) | 호출 에이전트 |
 |---|---|---|
 | 증류 | **하지 않는다** — 요약·LLM·임베딩 없음 | episode를 읽고 요약해 knowledge 노드/엣지를 만든다 |
-| `consolidated=true` | **세팅하지 않는다** (§8-1) | 증류를 마쳤다고 표시한다 |
+| `consolidated=true` | 추론하지 않는다. 에이전트가 `provenance`로 지목한 episode에만 그 선언의 결과로 세팅한다 (`promoteProvenance`) | `POST .../knowledge/nodes`의 `provenance`에 증류한 episode를 적어 증류를 선언한다 |
 | 후보 묶기 | entity·시간 클러스터를 제안 | 어느 후보를 증류할지 선택 |
 | supersede 판정 | 요청받은 대로만 수행 | 무엇이 무엇을 대체하는지 결정 |
 | deprecate 사유 | 비어 있으면 거부 | 왜 틀렸는지 문장을 제공 |
@@ -310,8 +309,8 @@ episode가 cold로 내려가도 id는 불변이므로 knowledge의 `provenance: 
 
 | # | 코드 실제 | 문서/주석 |
 |---|---|---|
-| 1 | **`consolidated=true`를 세팅하는 HTTP 경로가 없다.** 라우터에 episode 수정 엔드포인트가 없고, 서버가 `UpdateEpisodes`를 쓰는 곳은 recall 통계뿐이다. 실제 배포에서 episode는 영원히 `consolidated=false`이므로 **에이징이 절대 발동하지 않는다.** 블랙박스도 in-process `hotstore`로 플래그를 뒤집어 우회한다 (`test/blackbox/blackbox_test.go:413-420`) | 설계 §3.1·§4는 `consolidated=true`를 이동 조건으로 쓰지만 §7 API 표에 그 플래그를 세팅하는 엔드포인트가 없다 — 설계 자체의 구멍이 코드에 그대로 남았다 |
-| 2 | `knowledge.CanPurge`는 **테스트에서만** 호출된다. `handlePurgeNode`는 상태를 확인하지 않으므로 `active` 노드도 `confirm=true`로 즉시 purge된다 | `knowledge.go:211-216` 주석 "purge is only allowed from the archived/deprecated buffer, never directly from active" · 설계 §3의 완충층 원칙. code-standards §4(데드코드 정책) 위반이기도 하다 |
+| 1 | ~~`consolidated=true`를 세팅하는 HTTP 경로가 없다~~ — **해소됨.** `handleCreateNode`가 노드 쓰기 성공 후 `promoteProvenance`로 `provenance`에 지목된 hot episode를 `consolidated=true`로 표시하고 재색인한다. §7에 새 엔드포인트를 더하지 않고 설계 §3이 말한 자리(“에이전트가 증류해 knowledge 승격 — POST /knowledge, provenance 링크”)에서 루프가 닫힌다. 이 프로젝트에 없는 id(이미 cold로 내려갔거나 타 프로젝트)는 건너뛰고, 실패는 `degraded: ["provenance episodes not marked consolidated"]` | 설계 §3.1·§4와 일치 |
+| 2 | ~~`knowledge.CanPurge`는 테스트에서만 호출된다~~ — **해소됨.** `knowledge.Purge`가 게이트를 적용해 `active` 노드 purge를 409로 거부하고, 매달린 `superseded_by`·`supersedes` 참조까지 복구한다. `handlePurgeNode`는 그 함수만 호출한다 | 설계 §3의 완충층 원칙과 일치 |
 | 3 | `reason`은 `Transition`의 게이트로만 쓰이고 **어디에도 저장되지 않는다.** `Node`에 필드가 없고 감사 로그를 쓰는 코드도 없다 | `knowledge.go:189-190` 주석 "which the caller records in the PATCH audit" |
 | 4 | 압박 임계는 5 MiB(`5 << 20` = 5,242,880 B)와 5,000건. env로 조정 불가 | 설계 §3.1은 "파일 > 5MB 또는 5,000건" (MB vs MiB) |
 | 5 | 스냅샷은 dry-run이 아닌 **모든 실행에서 모든 프로젝트**에 대해 수행되며, knowledge 그래프가 비어 있어도 `latest.json` + `snapshots/{ts}.json` 2개를 쓴다. 스냅샷 정리(retention) 로직은 없다 | 설계 §3.1 "knowledge: 이동 없음 — 스냅샷 백업만"과 방향은 같지만, 무조건·무제한 누적이라는 점은 미규정 |
@@ -327,7 +326,8 @@ episode가 cold로 내려가도 id는 불변이므로 knowledge의 `provenance: 
 |---|---|---|
 | 상태·전이 정의 | `internal/knowledge/knowledge.go:28-35`, `:124-128` | `State`, `StateActive/Archived/Deprecated`, `transitions` |
 | 전이 실행 | `internal/knowledge/knowledge.go:192-209` | `Transition`, `ErrInvalidTransition` |
-| purge 자격(미사용) | `internal/knowledge/knowledge.go:211-216` | `CanPurge` |
+| purge 자격·실행 | `internal/knowledge/lifecycle.go` | `CanPurge`, `Purge`, `withoutID` |
+| 증류 승격 | `internal/server/handlers_knowledge.go` | `promoteProvenance`, `degradedPromotion` |
 | supersede 체인 | `internal/knowledge/knowledge.go:225-282` | `Supersede`, `FindNode`, `hasEdge`, `dedupe` |
 | 노드 불변식 | `internal/knowledge/knowledge.go:133-183` | `Node.Validate`, `Edge.Validate` |
 | 상태 전이 HTTP | `internal/server/handlers_knowledge.go:466-543` | `handlePatchNode`, `PatchNodeRequest` |

@@ -8,10 +8,9 @@ import (
 	"time"
 
 	"github.com/drakejin/memory-mcp/internal/episodic"
-	"github.com/drakejin/memory-mcp/internal/graph"
+	"github.com/drakejin/memory-mcp/internal/errs"
 	"github.com/drakejin/memory-mcp/internal/hotstore"
 	"github.com/drakejin/memory-mcp/internal/knowledge"
-	"github.com/drakejin/memory-mcp/internal/search"
 )
 
 var edgeBase = time.Date(2026, 8, 25, 0, 0, 0, 0, time.UTC)
@@ -22,9 +21,9 @@ func TestIndexKeyFor(t *testing.T) {
 		plane hotstore.Plane
 		want  string
 	}{
-		{"episodic", hotstore.PlaneEpisodic, IndexKeyEpisodic},
-		{"knowledge", hotstore.PlaneKnowledge, IndexKeyKnowledge},
-		{"unknown planes fall back to the episodic index", hotstore.Plane("other"), IndexKeyEpisodic},
+		{"episodic", hotstore.PlaneEpisodic, indexKeyEpisodic},
+		{"knowledge", hotstore.PlaneKnowledge, indexKeyKnowledge},
+		{"unknown planes fall back to the episodic index", hotstore.Plane("other"), indexKeyEpisodic},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -37,11 +36,15 @@ func TestIndexKeyFor(t *testing.T) {
 
 func TestCheckDriftManifestReadFailure(t *testing.T) {
 	store := newFakeStore()
-	store.manifestErr = errors.New("manifest unreadable")
-	r := New(store, newFakeIndex(), newFakeGraph(), &fakeClock{now: edgeBase})
+	store.manifestErr = errs.Internal("fake.Manifest", errors.New("manifest unreadable"))
+	r := newService(t, store, newFakeIndex(), newFakeGraph(), &fakeClock{now: edgeBase})
 
-	if _, err := r.CheckDrift(context.Background()); err == nil {
+	_, err := r.CheckDrift(context.Background())
+	if err == nil {
 		t.Fatal("CheckDrift must fail when the manifest cannot be read")
+	}
+	if !errors.Is(err, errs.ErrInternal) {
+		t.Errorf("CheckDrift error = %v, want the store's kind preserved", err)
 	}
 }
 
@@ -49,7 +52,7 @@ func TestKnowledgeDriftHotReadFailure(t *testing.T) {
 	store := newFakeStore()
 	store.graphs[testKey.String()] = knowledge.Graph{Nodes: []knowledge.Node{node("01AAAAAAAAAAAAAAAAAAAAAAAA")}}
 	store.listErr = errors.New("listing broken")
-	r := New(store, newFakeIndex(), newFakeGraph(), &fakeClock{now: edgeBase})
+	r := newService(t, store, newFakeIndex(), newFakeGraph(), &fakeClock{now: edgeBase})
 
 	d := r.knowledgeDrift(context.Background(), hotstore.Manifest{Files: map[string]hotstore.FileState{}})
 	if !d.Detected {
@@ -63,8 +66,8 @@ func TestKnowledgeDriftHotReadFailure(t *testing.T) {
 func TestDriftWhenDerivedStoresUnreachable(t *testing.T) {
 	tests := []struct {
 		name       string
-		index      search.Index
-		graph      graph.Store
+		index      EpisodeIndex
+		graph      KnowledgeGraph
 		wantEpiUn  bool
 		wantKnUn   bool
 		epiReason  string
@@ -73,20 +76,20 @@ func TestDriftWhenDerivedStoresUnreachable(t *testing.T) {
 		{
 			name: "both nil", index: nil, graph: nil,
 			wantEpiUn: true, wantKnUn: true,
-			epiReason: "opensearch not configured", knowReason: "neo4j not configured",
+			epiReason: reasonIndexNotConfigured, knowReason: reasonGraphNotConfigured,
 		},
 		{
 			name:      "both failing ping",
 			index:     &pingFailIndex{fakeIndex: newFakeIndex()},
 			graph:     &pingFailGraph{fakeGraph: newFakeGraph()},
 			wantEpiUn: true, wantKnUn: true,
-			epiReason: "opensearch unreachable", knowReason: "neo4j unreachable",
+			epiReason: reasonIndexUnreachable, knowReason: reasonGraphUnreachable,
 		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			r := New(newFakeStore(), tc.index, tc.graph, &fakeClock{now: edgeBase})
+			r := newService(t, newFakeStore(), tc.index, tc.graph, &fakeClock{now: edgeBase})
 			rep, err := r.CheckDrift(context.Background())
 			if err != nil {
 				t.Fatalf("CheckDrift: %v", err)
@@ -108,28 +111,54 @@ func TestDriftWhenDerivedStoresUnreachable(t *testing.T) {
 // pingFailIndex / pingFailGraph reject Ping but otherwise behave normally.
 type pingFailIndex struct{ *fakeIndex }
 
-func (p *pingFailIndex) Ping(context.Context) error { return search.ErrUnavailable }
+func (p *pingFailIndex) Ping(context.Context) error {
+	return errs.Unavailable("fake.Ping", nil)
+}
 
 type pingFailGraph struct{ *fakeGraph }
 
-func (p *pingFailGraph) Ping(context.Context) error { return graph.ErrUnavailable }
+func (p *pingFailGraph) Ping(context.Context) error {
+	return errs.Unavailable("fake.Ping", nil)
+}
+
+func TestGraphUncountableIsDrift(t *testing.T) {
+	store := newFakeStore()
+	gra := &countFailGraph{fakeGraph: newFakeGraph()}
+	r := newService(t, store, newFakeIndex(), gra, &fakeClock{now: edgeBase})
+
+	d := r.knowledgeDrift(context.Background(), hotstore.Manifest{Files: map[string]hotstore.FileState{}})
+	if !d.Detected || d.Reason != reasonGraphUncountable {
+		t.Fatalf("drift = %+v, want Detected with reason %q", d, reasonGraphUncountable)
+	}
+}
+
+type countFailGraph struct{ *fakeGraph }
+
+func (c *countFailGraph) NodeCount(context.Context, hotstore.ProjectKey) (int, error) {
+	return 0, errors.New("cypher rejected")
+}
 
 func TestRehydrateAllProjectListingFailure(t *testing.T) {
 	store := newFakeStore()
 	store.episodes[testKey.String()] = []episodic.Record{rec("01AAAAAAAAAAAAAAAAAAAAAAAA", edgeBase)}
-	store.listErr = errors.New("listing broken")
-	r := New(store, newFakeIndex(), newFakeGraph(), &fakeClock{now: edgeBase})
+	store.listErr = errs.Unavailable("fake.ListProjects", nil)
+	r := newService(t, store, newFakeIndex(), newFakeGraph(), &fakeClock{now: edgeBase})
 
-	if _, err := r.RehydrateAll(context.Background(), false); err == nil {
+	_, err := r.RehydrateAll(context.Background(), false)
+	if err == nil {
 		t.Fatal("RehydrateAll must fail when projects cannot be listed")
+	}
+	if !errors.Is(err, errs.ErrUnavailable) {
+		t.Errorf("RehydrateAll error = %v, want the store's kind preserved", err)
 	}
 }
 
 func TestRehydrateAllEnsureIndexFailure(t *testing.T) {
 	store := newFakeStore()
 	store.episodes[testKey.String()] = []episodic.Record{rec("01AAAAAAAAAAAAAAAAAAAAAAAA", edgeBase)}
-	idx := &ensureFailIndex{fakeIndex: newFakeIndex()}
-	r := New(store, idx, newFakeGraph(), &fakeClock{now: edgeBase})
+	idx := newFakeIndex()
+	idx.ensureErr = errors.New("mapping rejected")
+	r := newService(t, store, idx, newFakeGraph(), &fakeClock{now: edgeBase})
 
 	rep, err := r.RehydrateAll(context.Background(), false)
 	if err != nil {
@@ -141,21 +170,17 @@ func TestRehydrateAllEnsureIndexFailure(t *testing.T) {
 	if !hasFailureContaining(rep.Failures, "ensure index") {
 		t.Fatalf("failures = %v, want an ensure-index failure", rep.Failures)
 	}
-	if _, ok := store.manifest.Indexes[IndexKeyEpisodic]; ok {
+	if _, ok := store.manifest.Indexes[indexKeyEpisodic]; ok {
 		t.Error("hydration sha must not be recorded when the plane never converged")
 	}
 }
-
-type ensureFailIndex struct{ *fakeIndex }
-
-func (e *ensureFailIndex) EnsureIndex(context.Context) error { return errors.New("mapping rejected") }
 
 func TestRehydrateAllDropFailureIsNonFatal(t *testing.T) {
 	store := newFakeStore()
 	store.episodes[testKey.String()] = []episodic.Record{rec("01AAAAAAAAAAAAAAAAAAAAAAAA", edgeBase)}
 	idx := newFakeIndex()
 	idx.dropErr = errors.New("index_not_found")
-	r := New(store, idx, newFakeGraph(), &fakeClock{now: edgeBase})
+	r := newService(t, store, idx, newFakeGraph(), &fakeClock{now: edgeBase})
 
 	rep, err := r.RehydrateAll(context.Background(), false)
 	if err != nil {
@@ -177,7 +202,7 @@ func TestRehydrateAllEpisodeListingFailureIsPerProject(t *testing.T) {
 	// Only per-project episode listing breaks; ListProjects still works, so the
 	// run must degrade for that plane alone.
 	store.episodeListErr = errors.New("episode file corrupt")
-	r := New(store, newFakeIndex(), newFakeGraph(), &fakeClock{now: edgeBase})
+	r := newService(t, store, newFakeIndex(), newFakeGraph(), &fakeClock{now: edgeBase})
 
 	rep, err := r.RehydrateAll(context.Background(), false)
 	if err != nil {
@@ -196,11 +221,13 @@ func TestHotNodeCountReadFailure(t *testing.T) {
 	store := newFakeStore()
 	store.graphs[testKey.String()] = knowledge.Graph{Nodes: []knowledge.Node{node("01AAAAAAAAAAAAAAAAAAAAAAAA")}}
 	store.readKnowledgeErr = errors.New("knowledge file corrupt")
-	r := New(store, newFakeIndex(), newFakeGraph(), &fakeClock{now: edgeBase})
+	r := newService(t, store, newFakeIndex(), newFakeGraph(), &fakeClock{now: edgeBase})
 
-	if _, err := r.hotNodeCount(context.Background()); err == nil {
+	_, err := r.hotNodeCount(context.Background())
+	if err == nil {
 		t.Fatal("hotNodeCount must fail when a project graph is unreadable")
-	} else if !strings.Contains(err.Error(), testKey.String()) {
+	}
+	if !strings.Contains(err.Error(), testKey.String()) {
 		t.Errorf("error %q must name the offending project", err)
 	}
 }
@@ -214,7 +241,7 @@ func TestRehydrateKnowledgeFailures(t *testing.T) {
 	}{
 		{
 			name:        "node upsert fails",
-			mutate:      func(g *fakeGraph) { g.upsertErr = graph.ErrUnavailable },
+			mutate:      func(g *fakeGraph) { g.upsertErr = errs.Unavailable("fake.UpsertNodes", nil) },
 			wantFailure: "upsert nodes",
 		},
 		{
@@ -234,7 +261,7 @@ func TestRehydrateKnowledgeFailures(t *testing.T) {
 			}
 			gr := newFakeGraph()
 			tc.mutate(gr)
-			r := New(store, newFakeIndex(), gr, &fakeClock{now: edgeBase})
+			r := newService(t, store, newFakeIndex(), gr, &fakeClock{now: edgeBase})
 
 			rep, err := r.RehydrateAll(context.Background(), tc.verify)
 			if err != nil {
@@ -243,31 +270,58 @@ func TestRehydrateKnowledgeFailures(t *testing.T) {
 			if !hasFailureContaining(rep.Failures, tc.wantFailure) {
 				t.Fatalf("failures = %v, want one containing %q", rep.Failures, tc.wantFailure)
 			}
-			if _, ok := store.manifest.Indexes[IndexKeyKnowledge]; ok {
+			if _, ok := store.manifest.Indexes[indexKeyKnowledge]; ok {
 				t.Error("hydration sha recorded despite a failed knowledge plane")
 			}
 		})
 	}
 }
 
+func TestRehydrateAllEdgeUpsertFailure(t *testing.T) {
+	store := newFakeStore()
+	store.graphs[testKey.String()] = knowledge.Graph{
+		Edges: []knowledge.Edge{{From: "01AAAAAAAAAAAAAAAAAAAAAAAA", To: "01AAAAAAAAAAAAAAAAAAAAAAAA", Rel: knowledge.RelRelatesTo}},
+	}
+	gr := newFakeGraph()
+	gr.upsertErr = errors.New("relationship rejected")
+	r := newService(t, store, newFakeIndex(), gr, &fakeClock{now: edgeBase})
+
+	rep, err := r.RehydrateAll(context.Background(), false)
+	if err != nil {
+		t.Fatalf("RehydrateAll: %v", err)
+	}
+	if !hasFailureContaining(rep.Failures, "upsert edges") {
+		t.Fatalf("failures = %v, want the edge upsert failure", rep.Failures)
+	}
+}
+
 func TestRehydrateProjectDegraded(t *testing.T) {
 	tests := []struct {
 		name     string
-		index    search.Index
-		graph    graph.Store
+		index    EpisodeIndex
+		graph    KnowledgeGraph
 		wantErrs []string
+		wantKind error
 	}{
 		{
 			name: "no derived stores at all", index: nil, graph: nil,
 			wantErrs: []string{"opensearch unavailable", "neo4j unavailable"},
+			wantKind: errs.ErrUnavailable,
 		},
 		{
 			name: "index write fails", index: failingIndex(), graph: newFakeGraph(),
 			wantErrs: []string{"bulk index"},
+			wantKind: errs.ErrInternal,
 		},
 		{
 			name: "graph write fails", index: newFakeIndex(), graph: failingGraph(),
 			wantErrs: []string{"upsert"},
+			wantKind: errs.ErrInternal,
+		},
+		{
+			name: "index cannot be created", index: ensureFailIndex(), graph: newFakeGraph(),
+			wantErrs: []string{"ensure index"},
+			wantKind: errs.ErrInternal,
 		},
 	}
 
@@ -276,9 +330,9 @@ func TestRehydrateProjectDegraded(t *testing.T) {
 			store := newFakeStore()
 			store.episodes[testKey.String()] = []episodic.Record{rec("01AAAAAAAAAAAAAAAAAAAAAAAA", edgeBase)}
 			store.graphs[testKey.String()] = knowledge.Graph{Nodes: []knowledge.Node{node("01BBBBBBBBBBBBBBBBBBBBBBBB")}}
-			r := New(store, tc.index, tc.graph, &fakeClock{now: edgeBase})
+			r := newService(t, store, tc.index, tc.graph, &fakeClock{now: edgeBase})
 
-			_, err := r.RehydrateProject(context.Background(), testKey)
+			rep, err := r.RehydrateProject(context.Background(), testKey)
 			if err == nil {
 				t.Fatal("RehydrateProject must report an error when a plane fails")
 			}
@@ -287,19 +341,46 @@ func TestRehydrateProjectDegraded(t *testing.T) {
 					t.Errorf("error %q must mention %q", err, want)
 				}
 			}
+			if !errors.Is(err, tc.wantKind) {
+				t.Errorf("error %v has the wrong kind, want %v", err, tc.wantKind)
+			}
+			// The report still lists every failure, even on the error path.
+			if len(rep.Failures) == 0 {
+				t.Error("report must disclose the failures it returned an error for")
+			}
 		})
+	}
+}
+
+func TestRehydrateProjectHotKnowledgeReadFailure(t *testing.T) {
+	store := newFakeStore()
+	store.readKnowledgeErr = errors.New("knowledge file corrupt")
+	r := newService(t, store, newFakeIndex(), newFakeGraph(), &fakeClock{now: edgeBase})
+
+	_, err := r.RehydrateProject(context.Background(), testKey)
+	if err == nil {
+		t.Fatal("RehydrateProject must fail when hot knowledge cannot be read")
+	}
+	if !strings.Contains(err.Error(), "read") {
+		t.Errorf("error %q must name the failing step", err)
 	}
 }
 
 func failingIndex() *fakeIndex {
 	idx := newFakeIndex()
-	idx.indexErr = search.ErrUnavailable
+	idx.indexErr = errs.Unavailable("fake.IndexRecords", nil)
+	return idx
+}
+
+func ensureFailIndex() *fakeIndex {
+	idx := newFakeIndex()
+	idx.ensureErr = errors.New("mapping rejected")
 	return idx
 }
 
 func failingGraph() *fakeGraph {
 	gr := newFakeGraph()
-	gr.upsertErr = graph.ErrUnavailable
+	gr.upsertErr = errs.Unavailable("fake.UpsertNodes", nil)
 	return gr
 }
 
@@ -308,7 +389,7 @@ func TestRehydrateProjectWithNoHotContent(t *testing.T) {
 	store.episodes[testKey.String()] = nil
 	store.graphs[testKey.String()] = knowledge.Graph{}
 	idx := newFakeIndex()
-	r := New(store, idx, newFakeGraph(), &fakeClock{now: edgeBase})
+	r := newService(t, store, idx, newFakeGraph(), &fakeClock{now: edgeBase})
 
 	rep, err := r.RehydrateProject(context.Background(), testKey)
 	if err != nil {
@@ -322,10 +403,25 @@ func TestRehydrateProjectWithNoHotContent(t *testing.T) {
 	}
 }
 
+func TestRehydrateProjectManifestFailureIsReported(t *testing.T) {
+	store := newFakeStore()
+	store.episodes[testKey.String()] = []episodic.Record{rec("01AAAAAAAAAAAAAAAAAAAAAAAA", edgeBase)}
+	store.failWrite = true
+	r := newService(t, store, newFakeIndex(), newFakeGraph(), &fakeClock{now: edgeBase})
+
+	rep, err := r.RehydrateProject(context.Background(), testKey)
+	if err == nil {
+		t.Fatal("RehydrateProject must surface a manifest write failure")
+	}
+	if !hasFailureContaining(rep.Failures, "manifest update") {
+		t.Errorf("failures = %v, want the manifest failure disclosed", rep.Failures)
+	}
+}
+
 func TestStatGateManifestFailure(t *testing.T) {
 	store := newFakeStore()
-	store.manifestErr = errors.New("manifest unreadable")
-	r := New(store, newFakeIndex(), newFakeGraph(), &fakeClock{now: edgeBase})
+	store.manifestErr = errs.Internal("fake.Manifest", errors.New("manifest unreadable"))
+	r := newService(t, store, newFakeIndex(), newFakeGraph(), &fakeClock{now: edgeBase})
 
 	if err := r.StatGate(context.Background(), testKey); err == nil {
 		t.Fatal("StatGate must surface a manifest read failure")
@@ -350,7 +446,7 @@ func TestRehydrateAllClearsStaleGraphNodes(t *testing.T) {
 	gra.nodes["other/other/other"] = map[string]knowledge.Node{
 		"01STALE000000000000000000B": node("01STALE000000000000000000B"),
 	}
-	r := New(store, newFakeIndex(), gra, &fakeClock{now: edgeBase})
+	r := newService(t, store, newFakeIndex(), gra, &fakeClock{now: edgeBase})
 
 	// Act
 	rep, err := r.RehydrateAll(context.Background(), false)
@@ -390,7 +486,7 @@ func TestRehydrateProjectDoesNotClearOtherProjects(t *testing.T) {
 	gra.nodes[other.String()] = map[string]knowledge.Node{
 		"01OTHER00000000000000000A": node("01OTHER00000000000000000A"),
 	}
-	r := New(store, newFakeIndex(), gra, &fakeClock{now: edgeBase})
+	r := newService(t, store, newFakeIndex(), gra, &fakeClock{now: edgeBase})
 
 	// Act
 	if _, err := r.RehydrateProject(context.Background(), testKey); err != nil {

@@ -3,7 +3,6 @@ package consolidate
 import (
 	"context"
 	"errors"
-	"io"
 	"slices"
 	"strings"
 	"testing"
@@ -11,27 +10,29 @@ import (
 
 	"github.com/drakejin/memory-mcp/internal/cold"
 	"github.com/drakejin/memory-mcp/internal/episodic"
+	"github.com/drakejin/memory-mcp/internal/errs"
 	"github.com/drakejin/memory-mcp/internal/hotstore"
 	"github.com/drakejin/memory-mcp/internal/knowledge"
-	"github.com/drakejin/memory-mcp/internal/search"
 )
 
 // calls is a shared ordered log so tests can assert the §4 aging order:
 // S3 put confirmed → hot remove → index delete.
 type calls struct{ log []string }
 
-// fakeRunStore is an in-memory hotstore.Store for Runner tests.
-type fakeRunStore struct {
+// fakeStore implements HotStore in memory.
+type fakeStore struct {
 	c            *calls
 	episodes     map[string][]episodic.Record
 	graphs       map[string]knowledge.Graph
 	dirty        map[string]bool
 	removeErr    error
+	listErr      error
+	manifestErr  error
 	manifestHits int
 }
 
-func newFakeRunStore(c *calls) *fakeRunStore {
-	return &fakeRunStore{
+func newFakeStore(c *calls) *fakeStore {
+	return &fakeStore{
 		c:        c,
 		episodes: map[string][]episodic.Record{},
 		graphs:   map[string]knowledge.Graph{},
@@ -39,24 +40,18 @@ func newFakeRunStore(c *calls) *fakeRunStore {
 	}
 }
 
-func (s *fakeRunStore) AppendEpisode(_ context.Context, key hotstore.ProjectKey, rec episodic.Record) error {
+func (s *fakeStore) append(key hotstore.ProjectKey, rec episodic.Record) {
 	s.episodes[key.String()] = append(s.episodes[key.String()], rec)
-	return nil
 }
 
-func (s *fakeRunStore) ListEpisodes(_ context.Context, key hotstore.ProjectKey) ([]episodic.Record, error) {
+func (s *fakeStore) ListEpisodes(_ context.Context, key hotstore.ProjectKey) ([]episodic.Record, error) {
+	if s.listErr != nil {
+		return nil, s.listErr
+	}
 	return slices.Clone(s.episodes[key.String()]), nil
 }
 
-func (s *fakeRunStore) GetEpisode(_ context.Context, _ hotstore.ProjectKey, _ string) (episodic.Record, error) {
-	return episodic.Record{}, hotstore.ErrNotFound
-}
-
-func (s *fakeRunStore) UpdateEpisodes(_ context.Context, _ hotstore.ProjectKey, _ []string, _ func(episodic.Record) episodic.Record) error {
-	return nil
-}
-
-func (s *fakeRunStore) RemoveEpisodes(_ context.Context, key hotstore.ProjectKey, ids []string) error {
+func (s *fakeStore) RemoveEpisodes(_ context.Context, key hotstore.ProjectKey, ids []string) error {
 	if s.removeErr != nil {
 		return s.removeErr
 	}
@@ -71,27 +66,15 @@ func (s *fakeRunStore) RemoveEpisodes(_ context.Context, key hotstore.ProjectKey
 	return nil
 }
 
-func (s *fakeRunStore) ReadKnowledge(_ context.Context, key hotstore.ProjectKey) (knowledge.Graph, error) {
+func (s *fakeStore) ReadKnowledge(_ context.Context, key hotstore.ProjectKey) (knowledge.Graph, error) {
 	return s.graphs[key.String()], nil
 }
 
-func (s *fakeRunStore) WriteKnowledge(_ context.Context, key hotstore.ProjectKey, g knowledge.Graph) error {
-	s.graphs[key.String()] = g
-	return nil
-}
-
-func (s *fakeRunStore) ListProjects(_ context.Context) ([]hotstore.ProjectKey, error) {
-	seen := map[string]bool{}
-	var out []hotstore.ProjectKey
-	add := func(name string) {
-		if seen[name] {
-			return
-		}
-		seen[name] = true
-		parts := strings.SplitN(name, "/", 3)
-		out = append(out, hotstore.ProjectKey{Workspace: parts[0], Team: parts[1], Project: parts[2]})
+func (s *fakeStore) ListProjects(_ context.Context) ([]hotstore.ProjectKey, error) {
+	if s.listErr != nil {
+		return nil, s.listErr
 	}
-	var names []string
+	names := make([]string, 0, len(s.episodes)+len(s.graphs))
 	for k := range s.episodes {
 		names = append(names, k)
 	}
@@ -99,45 +82,41 @@ func (s *fakeRunStore) ListProjects(_ context.Context) ([]hotstore.ProjectKey, e
 		names = append(names, k)
 	}
 	slices.Sort(names)
-	for _, n := range names {
-		add(n)
+	names = slices.Compact(names)
+	out := make([]hotstore.ProjectKey, 0, len(names))
+	for _, name := range names {
+		parts := strings.SplitN(name, "/", 3)
+		out = append(out, hotstore.ProjectKey{Workspace: parts[0], Team: parts[1], Project: parts[2]})
 	}
 	return out, nil
 }
 
-func (s *fakeRunStore) Manifest(_ context.Context) (hotstore.Manifest, error) {
-	return hotstore.Manifest{}, nil
-}
-
-func (s *fakeRunStore) UpdateManifest(_ context.Context, fn func(hotstore.Manifest) (hotstore.Manifest, error)) error {
+func (s *fakeStore) UpdateManifest(_ context.Context, fn func(hotstore.Manifest) (hotstore.Manifest, error)) error {
 	s.manifestHits++
+	if s.manifestErr != nil {
+		return s.manifestErr
+	}
 	_, err := fn(hotstore.Manifest{})
 	return err
 }
 
-func (s *fakeRunStore) MarkDirty(_ context.Context, key hotstore.ProjectKey, plane hotstore.Plane) error {
+func (s *fakeStore) MarkDirty(_ context.Context, key hotstore.ProjectKey, plane hotstore.Plane) error {
 	s.dirty[string(plane)+"/"+key.String()] = true
 	return nil
 }
 
-func (s *fakeRunStore) FileInfo(_ context.Context, _ hotstore.ProjectKey, _ hotstore.Plane) (int64, time.Time, error) {
-	return 0, time.Time{}, hotstore.ErrNotFound
+func (s *fakeStore) FileInfo(_ context.Context, key hotstore.ProjectKey, plane hotstore.Plane) (int64, time.Time, error) {
+	return 0, time.Time{}, errs.NotFound("fake.FileInfo", "hot_file", string(plane)+"/"+key.String())
 }
 
-// fakeRunIndex is a minimal search.Index recording deletions.
-type fakeRunIndex struct {
+// fakeIndexer implements EpisodeIndexer, recording deletions.
+type fakeIndexer struct {
 	c         *calls
 	deleteErr error
 	deleted   []string
 }
 
-func (f *fakeRunIndex) Ping(context.Context) error        { return nil }
-func (f *fakeRunIndex) EnsureIndex(context.Context) error { return nil }
-func (f *fakeRunIndex) IndexRecords(context.Context, hotstore.ProjectKey, []episodic.Record) error {
-	return nil
-}
-
-func (f *fakeRunIndex) DeleteRecords(_ context.Context, _ hotstore.ProjectKey, ids []string) error {
+func (f *fakeIndexer) DeleteRecords(_ context.Context, _ hotstore.ProjectKey, ids []string) error {
 	if f.deleteErr != nil {
 		return f.deleteErr
 	}
@@ -146,14 +125,8 @@ func (f *fakeRunIndex) DeleteRecords(_ context.Context, _ hotstore.ProjectKey, i
 	return nil
 }
 
-func (f *fakeRunIndex) Search(context.Context, hotstore.ProjectKey, search.Query) ([]search.Hit, error) {
-	return nil, nil
-}
-func (f *fakeRunIndex) DocCount(context.Context, hotstore.ProjectKey) (int, error) { return 0, nil }
-func (f *fakeRunIndex) Drop(context.Context) error                                 { return nil }
-
-// fakeRunArchiver is a minimal cold.Archiver recording archive/snapshot calls.
-type fakeRunArchiver struct {
+// fakeArchiver implements ColdArchiver, recording archive/snapshot calls.
+type fakeArchiver struct {
 	c           *calls
 	archiveErr  error
 	snapshotErr error
@@ -162,11 +135,11 @@ type fakeRunArchiver struct {
 	username    string
 }
 
-func newFakeRunArchiver(c *calls) *fakeRunArchiver {
-	return &fakeRunArchiver{c: c, archived: map[string][]episodic.Record{}, username: "jin"}
+func newFakeArchiver(c *calls) *fakeArchiver {
+	return &fakeArchiver{c: c, archived: map[string][]episodic.Record{}, username: "jin"}
 }
 
-func (f *fakeRunArchiver) ArchiveEpisodes(_ context.Context, key hotstore.ProjectKey, month string, recs []episodic.Record) (string, error) {
+func (f *fakeArchiver) ArchiveEpisodes(_ context.Context, key hotstore.ProjectKey, month string, recs []episodic.Record) (string, error) {
 	if f.archiveErr != nil {
 		return "", f.archiveErr
 	}
@@ -180,11 +153,7 @@ func (f *fakeRunArchiver) ArchiveEpisodes(_ context.Context, key hotstore.Projec
 	return s3Key, nil
 }
 
-func (f *fakeRunArchiver) FetchArchivedEpisode(context.Context, hotstore.ProjectKey, string) (episodic.Record, error) {
-	return episodic.Record{}, cold.ErrNotFound
-}
-
-func (f *fakeRunArchiver) SnapshotKnowledge(_ context.Context, key hotstore.ProjectKey, _ knowledge.Graph, ts time.Time) (string, string, error) {
+func (f *fakeArchiver) SnapshotKnowledge(_ context.Context, key hotstore.ProjectKey, _ knowledge.Graph, ts time.Time) (string, string, error) {
 	if f.snapshotErr != nil {
 		return "", "", f.snapshotErr
 	}
@@ -195,19 +164,9 @@ func (f *fakeRunArchiver) SnapshotKnowledge(_ context.Context, key hotstore.Proj
 	return latest, snap, nil
 }
 
-func (f *fakeRunArchiver) UploadBlob(context.Context, string, io.Reader) (string, error) {
-	return "", errors.New("unused")
-}
+type fakeClock struct{ t time.Time }
 
-func (f *fakeRunArchiver) FetchBlob(context.Context, string) (io.ReadCloser, error) {
-	return nil, cold.ErrNotFound
-}
-
-func (f *fakeRunArchiver) BlobExists(context.Context, string) (bool, error) { return false, nil }
-
-type runClock struct{ t time.Time }
-
-func (c runClock) Now() time.Time { return c.t }
+func (c fakeClock) Now() time.Time { return c.t }
 
 // ---- fixtures --------------------------------------------------------------
 
@@ -216,33 +175,83 @@ var (
 	runKey = hotstore.ProjectKey{Workspace: "vms", Team: "core", Project: "memory"}
 )
 
-func seedProject(store *fakeRunStore) (agedOld, agedJune, keptRecent, keptUncons episodic.Record) {
-	agedOld = crec("01AGEDJUL", runNow.AddDate(0, 0, -40), []string{"opensearch"}, true) // 2026-07
-	agedJune = crec("01AGEDJUN", runNow.AddDate(0, 0, -70), []string{"neo4j"}, true)     // 2026-06
-	keptRecent = crec("01RECENT", runNow.AddDate(0, 0, -5), []string{"opensearch"}, true)
-	keptUncons = crec("01UNCONS", runNow.AddDate(0, 0, -60), []string{"s3"}, false)
-	ctx := context.Background()
-	for _, rec := range []episodic.Record{agedJune, agedOld, keptRecent, keptUncons} {
-		_ = store.AppendEpisode(ctx, runKey, rec)
+func seedProject(store *fakeStore) {
+	for _, rec := range []episodic.Record{
+		crec("01AGEDJUN", runNow.AddDate(0, 0, -70), []string{"neo4j"}, true),      // 2026-06
+		crec("01AGEDJUL", runNow.AddDate(0, 0, -40), []string{"opensearch"}, true), // 2026-07
+		crec("01RECENT", runNow.AddDate(0, 0, -5), []string{"opensearch"}, true),
+		crec("01UNCONS", runNow.AddDate(0, 0, -60), []string{"s3"}, false),
+	} {
+		store.append(runKey, rec)
 	}
-	store.graphs[runKey.String()] = knowledge.Graph{Nodes: []knowledge.Node{{ID: "01N", Kind: knowledge.KindFact, Name: "fact"}}}
-	return
+	store.graphs[runKey.String()] = knowledge.Graph{
+		Nodes: []knowledge.Node{{ID: "01N", Kind: knowledge.KindFact, Name: "fact"}},
+	}
 }
 
-func newRunner(store *fakeRunStore, index search.Index, archiver cold.Archiver) *Runner {
-	return New(store, index, archiver, runClock{t: runNow}, 30)
+// newTestService wires a Service the way main does, with nil-able derived deps.
+func newTestService(t *testing.T, store HotStore, index EpisodeIndexer, archiver ColdArchiver) Service {
+	t.Helper()
+	svc, err := New(Config{
+		Store:    store,
+		Index:    index,
+		Archiver: archiver,
+		Clock:    fakeClock{t: runNow},
+		TTLDays:  30,
+	})
+	if err != nil {
+		t.Fatalf("New() = %v", err)
+	}
+	return svc
 }
 
-// ---- tests -----------------------------------------------------------------
+// ---- construction ----------------------------------------------------------
+
+func TestNewRejectsIncompleteConfig(t *testing.T) {
+	store := newFakeStore(&calls{})
+	tests := []struct {
+		name string
+		cfg  Config
+	}{
+		{name: "missing store", cfg: Config{Clock: fakeClock{}, TTLDays: 30}},
+		{name: "missing clock", cfg: Config{Store: store, TTLDays: 30}},
+		{name: "zero ttl", cfg: Config{Store: store, Clock: fakeClock{}}},
+		{name: "negative ttl", cfg: Config{Store: store, Clock: fakeClock{}, TTLDays: -1}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc, err := New(tt.cfg)
+			if err == nil {
+				t.Fatal("New() = nil error, want invalid config")
+			}
+			if !errors.Is(err, errs.ErrInvalid) {
+				t.Errorf("New() error = %v, want kind invalid", err)
+			}
+			if svc != nil {
+				t.Error("New() must not return a service alongside an error")
+			}
+		})
+	}
+}
+
+func TestNewAcceptsNilDerivedStores(t *testing.T) {
+	// A dead OpenSearch or S3 must not stop the pipeline from being built:
+	// candidates and entity stats work without any derived store (§5).
+	if _, err := New(Config{Store: newFakeStore(&calls{}), Clock: fakeClock{}, TTLDays: 1}); err != nil {
+		t.Fatalf("New() = %v", err)
+	}
+}
+
+// ---- Run -------------------------------------------------------------------
 
 func TestRunHappyPath(t *testing.T) {
 	c := &calls{}
-	store := newFakeRunStore(c)
-	index := &fakeRunIndex{c: c}
-	archiver := newFakeRunArchiver(c)
+	store := newFakeStore(c)
+	index := &fakeIndexer{c: c}
+	archiver := newFakeArchiver(c)
 	seedProject(store)
 
-	report, err := newRunner(store, index, archiver).Run(context.Background(), Options{})
+	report, err := newTestService(t, store, index, archiver).Run(context.Background(), Options{})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -311,13 +320,13 @@ func TestRunHappyPath(t *testing.T) {
 
 func TestRunS3FailureBlocksLocalDeletion(t *testing.T) {
 	c := &calls{}
-	store := newFakeRunStore(c)
-	index := &fakeRunIndex{c: c}
-	archiver := newFakeRunArchiver(c)
+	store := newFakeStore(c)
+	index := &fakeIndexer{c: c}
+	archiver := newFakeArchiver(c)
 	archiver.archiveErr = errors.New("s3 down")
 	seedProject(store)
 
-	report, err := newRunner(store, index, archiver).Run(context.Background(), Options{})
+	report, err := newTestService(t, store, index, archiver).Run(context.Background(), Options{})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -343,13 +352,13 @@ func TestRunS3FailureBlocksLocalDeletion(t *testing.T) {
 
 func TestRunHotRemoveFailureSkipsIndexDelete(t *testing.T) {
 	c := &calls{}
-	store := newFakeRunStore(c)
+	store := newFakeStore(c)
 	store.removeErr = errors.New("disk full")
-	index := &fakeRunIndex{c: c}
-	archiver := newFakeRunArchiver(c)
+	index := &fakeIndexer{c: c}
+	archiver := newFakeArchiver(c)
 	seedProject(store)
 
-	report, err := newRunner(store, index, archiver).Run(context.Background(), Options{})
+	report, err := newTestService(t, store, index, archiver).Run(context.Background(), Options{})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -366,12 +375,12 @@ func TestRunHotRemoveFailureSkipsIndexDelete(t *testing.T) {
 
 func TestRunIndexFailureIsDegraded(t *testing.T) {
 	c := &calls{}
-	store := newFakeRunStore(c)
-	index := &fakeRunIndex{c: c, deleteErr: search.ErrUnavailable}
-	archiver := newFakeRunArchiver(c)
+	store := newFakeStore(c)
+	index := &fakeIndexer{c: c, deleteErr: errs.Unavailable("fake.DeleteRecords", nil)}
+	archiver := newFakeArchiver(c)
 	seedProject(store)
 
-	report, err := newRunner(store, index, archiver).Run(context.Background(), Options{})
+	report, err := newTestService(t, store, index, archiver).Run(context.Background(), Options{})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -388,10 +397,10 @@ func TestRunIndexFailureIsDegraded(t *testing.T) {
 
 func TestRunNilDerivedDeps(t *testing.T) {
 	c := &calls{}
-	store := newFakeRunStore(c)
+	store := newFakeStore(c)
 	seedProject(store)
 
-	report, err := New(store, nil, nil, runClock{t: runNow}, 30).Run(context.Background(), Options{})
+	report, err := newTestService(t, store, nil, nil).Run(context.Background(), Options{})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -404,6 +413,11 @@ func TestRunNilDerivedDeps(t *testing.T) {
 	if len(report.Failures) != 2 { // age + snapshot unavailable
 		t.Errorf("failures = %v, want age+snapshot unavailability", report.Failures)
 	}
+	for _, f := range report.Failures {
+		if !strings.Contains(f, msgColdUnavailable) {
+			t.Errorf("failure %q must name the missing cold store", f)
+		}
+	}
 	// Candidates and stats still work without any derived service.
 	if len(report.Candidates) != 1 {
 		t.Errorf("candidates = %+v", report.Candidates)
@@ -412,12 +426,12 @@ func TestRunNilDerivedDeps(t *testing.T) {
 
 func TestRunDryRun(t *testing.T) {
 	c := &calls{}
-	store := newFakeRunStore(c)
-	index := &fakeRunIndex{c: c}
-	archiver := newFakeRunArchiver(c)
+	store := newFakeStore(c)
+	index := &fakeIndexer{c: c}
+	archiver := newFakeArchiver(c)
 	seedProject(store)
 
-	report, err := newRunner(store, index, archiver).Run(context.Background(), Options{DryRun: true})
+	report, err := newTestService(t, store, index, archiver).Run(context.Background(), Options{DryRun: true})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -440,16 +454,15 @@ func TestRunDryRun(t *testing.T) {
 
 func TestRunScopedToRequestedProjects(t *testing.T) {
 	c := &calls{}
-	store := newFakeRunStore(c)
-	index := &fakeRunIndex{c: c}
-	archiver := newFakeRunArchiver(c)
+	store := newFakeStore(c)
+	index := &fakeIndexer{c: c}
+	archiver := newFakeArchiver(c)
 	seedProject(store)
 
 	otherKey := hotstore.ProjectKey{Workspace: "vms", Team: "core", Project: "other"}
-	old := crec("01OTHEROLD", runNow.AddDate(0, 0, -40), nil, true)
-	_ = store.AppendEpisode(context.Background(), otherKey, old)
+	store.append(otherKey, crec("01OTHEROLD", runNow.AddDate(0, 0, -40), nil, true))
 
-	report, err := newRunner(store, index, archiver).Run(context.Background(), Options{
+	report, err := newTestService(t, store, index, archiver).Run(context.Background(), Options{
 		Projects: []hotstore.ProjectKey{otherKey},
 	})
 	if err != nil {
@@ -463,5 +476,84 @@ func TestRunScopedToRequestedProjects(t *testing.T) {
 	}
 	if len(store.episodes[otherKey.String()]) != 0 {
 		t.Error("scoped project's aged record must be removed from hot")
+	}
+}
+
+func TestRunProjectListingFailureAborts(t *testing.T) {
+	c := &calls{}
+	store := newFakeStore(c)
+	seedProject(store)
+	store.listErr = errs.Internal("fake.ListProjects", errors.New("disk gone"))
+
+	_, err := newTestService(t, store, &fakeIndexer{c: c}, newFakeArchiver(c)).Run(context.Background(), Options{})
+	if err == nil {
+		t.Fatal("Run must fail when projects cannot be listed at all")
+	}
+	if !errors.Is(err, errs.ErrInternal) {
+		t.Errorf("Run error = %v, want the store's kind preserved", err)
+	}
+}
+
+func TestRunPerProjectListingFailureIsReported(t *testing.T) {
+	c := &calls{}
+	store := newFakeStore(c)
+	seedProject(store)
+	store.listErr = errs.Unavailable("fake.ListEpisodes", nil)
+
+	report, err := newTestService(t, store, &fakeIndexer{c: c}, newFakeArchiver(c)).
+		Run(context.Background(), Options{Projects: []hotstore.ProjectKey{runKey}})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(report.Failures) != 1 || !strings.HasPrefix(report.Failures[0], stepList+": "+runKey.String()) {
+		t.Fatalf("failures = %v, want one list failure naming the project", report.Failures)
+	}
+}
+
+func TestRunManifestFailureIsReported(t *testing.T) {
+	c := &calls{}
+	store := newFakeStore(c)
+	store.manifestErr = errors.New("manifest write failed")
+	seedProject(store)
+
+	report, err := newTestService(t, store, &fakeIndexer{c: c}, newFakeArchiver(c)).Run(context.Background(), Options{})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !slices.ContainsFunc(report.Failures, func(f string) bool { return strings.HasPrefix(f, stepManifest+": ") }) {
+		t.Errorf("failures = %v, want the manifest failure disclosed", report.Failures)
+	}
+}
+
+func TestRunSnapshotFailureIsReported(t *testing.T) {
+	c := &calls{}
+	store := newFakeStore(c)
+	archiver := newFakeArchiver(c)
+	archiver.snapshotErr = errors.New("s3 snapshot rejected")
+	seedProject(store)
+
+	report, err := newTestService(t, store, &fakeIndexer{c: c}, archiver).Run(context.Background(), Options{})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(report.SnapshotKeys) != 0 {
+		t.Errorf("snapshot keys = %v, want none when the upload failed", report.SnapshotKeys)
+	}
+	if !slices.ContainsFunc(report.Failures, func(f string) bool { return strings.HasPrefix(f, stepSnapshot+": ") }) {
+		t.Errorf("failures = %v, want the snapshot failure disclosed", report.Failures)
+	}
+}
+
+func TestRunEmptyStoreProducesEmptyReport(t *testing.T) {
+	c := &calls{}
+	report, err := newTestService(t, newFakeStore(c), &fakeIndexer{c: c}, newFakeArchiver(c)).
+		Run(context.Background(), Options{})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	// Non-nil slices keep the JSON envelope honest: [] not null.
+	if report.Candidates == nil || report.Entities == nil ||
+		report.ArchiveKeys == nil || report.SnapshotKeys == nil || report.Failures == nil {
+		t.Errorf("report has nil slices: %+v", report)
 	}
 }

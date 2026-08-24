@@ -11,14 +11,14 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
-	"github.com/drakejin/memory-mcp/internal/cold"
-	"github.com/drakejin/memory-mcp/internal/config"
 	"github.com/drakejin/memory-mcp/internal/consolidate"
 	"github.com/drakejin/memory-mcp/internal/document"
 	"github.com/drakejin/memory-mcp/internal/episodic"
+	"github.com/drakejin/memory-mcp/internal/errs"
 	"github.com/drakejin/memory-mcp/internal/hotstore"
 	"github.com/drakejin/memory-mcp/internal/knowledge"
 	"github.com/drakejin/memory-mcp/internal/rehydrate"
@@ -42,19 +42,14 @@ const (
 // testSHA is a well-formed lowercase-hex sha256.
 const testSHA = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 
-func testConfig() config.Config {
-	return config.Config{
-		Home:            t0Dir,
-		Username:        "jin",
-		S3Bucket:        "vms-memory-mcp",
-		S3Region:        config.DefaultS3Region,
-		ListenAddr:      config.DefaultListenAddr,
-		EpisodicTTLDays: config.DefaultEpisodicTTLDays,
-	}
-}
-
-// t0Dir keeps testConfig free of filesystem side effects; no handler touches it.
-const t0Dir = "/tmp/memory-mcp-test-home"
+// Settings every test server is built with. They mirror the production
+// defaults without importing internal/config: the server takes only these
+// three values, so the test does too.
+const (
+	testListenAddr = "127.0.0.1:8420"
+	testS3Bucket   = "vms-memory-mcp"
+	testTTLDays    = 30
+)
 
 // discardLogger keeps test output clean while still exercising the log paths.
 func discardLogger() *slog.Logger {
@@ -62,18 +57,55 @@ func discardLogger() *slog.Logger {
 }
 
 // --- fakes ------------------------------------------------------------------
+//
+// Each fake implements exactly the narrow interface of deps.go, so a test
+// double never has to grow methods the handlers do not call. Errors they hand
+// back are *errs.Error, the same semantic vocabulary the real collaborators
+// promise (code-standards §2.1).
 
 type fakeClock struct{ now time.Time }
 
 func (c fakeClock) Now() time.Time { return c.now }
 
-// fakeStore is an in-memory hotstore.Store. Error hooks let tests drive the
-// failure branches without touching the disk.
+// fakeIDs mints predictable, well-formed ULIDs so a test can assert on the id
+// the server assigned. lastMillis records the timestamp it was handed, which is
+// how the tests prove ids come from the injected clock and not the wall clock.
+type fakeIDs struct {
+	// mu guards seq and lastMillis: the concurrency tests mint ids from
+	// several goroutines at once, and a fake that races is a fake that
+	// reports the race instead of the behaviour under test.
+	mu         sync.Mutex
+	seq        int
+	err        error
+	lastMillis int64
+}
+
+var _ IDGenerator = (*fakeIDs)(nil)
+
+func (f *fakeIDs) GenerateAt(unixMillis int64) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.lastMillis = unixMillis
+	if f.err != nil {
+		return "", f.err
+	}
+	f.seq++
+	// 4-char head + 22 digits = the 26 Crockford characters ulid.Valid wants.
+	return fmt.Sprintf("01JD%022d", f.seq), nil
+}
+
+// fakeStore is an in-memory HotStore. Error hooks let tests drive the failure
+// branches without touching the disk.
 type fakeStore struct {
+	// mu guards the whole fake, exactly as hotstore.client.mu guards the whole
+	// real store. Modelling that is not decoration: UpdateKnowledge must hold
+	// it across read-modify-write, or a concurrency test would pass against a
+	// fake that is atomic by accident of the Go scheduler.
+	mu sync.Mutex
+
 	episodes map[string][]episodic.Record
 	graphs   map[string]knowledge.Graph
 	manifest hotstore.Manifest
-	mtimes   map[string]time.Time
 
 	appendErr    error
 	readErr      error
@@ -89,18 +121,19 @@ type fakeStore struct {
 	writeSeq    int
 }
 
-// touchEpisodic mirrors what FileStore does on every episodic hot write: a new
-// content hash and mtime land in the manifest. Without this fidelity the fake
-// cannot express the drift the hydration sha is designed to catch (§5), which
-// is exactly how the recall-bump drift bug stayed invisible to unit tests.
+var _ HotStore = (*fakeStore)(nil)
+
+// touchEpisodic mirrors what the real store does on every episodic hot write: a
+// new content hash and record count land in the manifest. Without this fidelity
+// the fake cannot express the drift the hydration sha is designed to catch
+// (§5), which is exactly how the recall-bump drift bug stayed invisible.
 func (s *fakeStore) touchEpisodic(key hotstore.ProjectKey) {
 	s.writeSeq++
-	fk := rehydrate.FileKey(hotstore.PlaneEpisodic, key)
+	fk := hotstore.ManifestFileKey(hotstore.PlaneEpisodic, key)
 	fs := s.manifest.Files[fk]
 	fs.SHA256 = fmt.Sprintf("sha-%d", s.writeSeq)
 	fs.RecordCount = len(s.episodes[key.String()])
 	s.manifest.Files[fk] = fs
-	s.mtimes[fk] = fixedNow
 }
 
 func newFakeStore() *fakeStore {
@@ -111,11 +144,12 @@ func newFakeStore() *fakeStore {
 			Files:   map[string]hotstore.FileState{},
 			Indexes: map[string]hotstore.IndexState{},
 		},
-		mtimes: map[string]time.Time{},
 	}
 }
 
 func (s *fakeStore) AppendEpisode(_ context.Context, key hotstore.ProjectKey, rec episodic.Record) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.appendErr != nil {
 		return s.appendErr
 	}
@@ -125,6 +159,8 @@ func (s *fakeStore) AppendEpisode(_ context.Context, key hotstore.ProjectKey, re
 }
 
 func (s *fakeStore) ListEpisodes(_ context.Context, key hotstore.ProjectKey) ([]episodic.Record, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.listEpisErr != nil {
 		return nil, s.listEpisErr
 	}
@@ -132,6 +168,8 @@ func (s *fakeStore) ListEpisodes(_ context.Context, key hotstore.ProjectKey) ([]
 }
 
 func (s *fakeStore) GetEpisode(_ context.Context, key hotstore.ProjectKey, id string) (episodic.Record, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.getErr != nil {
 		return episodic.Record{}, s.getErr
 	}
@@ -140,10 +178,12 @@ func (s *fakeStore) GetEpisode(_ context.Context, key hotstore.ProjectKey, id st
 			return r, nil
 		}
 	}
-	return episodic.Record{}, hotstore.ErrNotFound
+	return episodic.Record{}, errs.NotFound("hotstore.GetEpisode", "episode", id)
 }
 
 func (s *fakeStore) UpdateEpisodes(_ context.Context, key hotstore.ProjectKey, ids []string, fn func(episodic.Record) episodic.Record) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.updateCalls++
 	if s.updateEpiErr != nil {
 		return s.updateEpiErr
@@ -162,61 +202,56 @@ func (s *fakeStore) UpdateEpisodes(_ context.Context, key hotstore.ProjectKey, i
 	return nil
 }
 
-func (s *fakeStore) RemoveEpisodes(_ context.Context, _ hotstore.ProjectKey, _ []string) error {
-	return nil
-}
-
 func (s *fakeStore) ReadKnowledge(_ context.Context, key hotstore.ProjectKey) (knowledge.Graph, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.readErr != nil {
 		return knowledge.Graph{}, s.readErr
 	}
 	return s.graphs[key.String()], nil
 }
 
-func (s *fakeStore) WriteKnowledge(_ context.Context, key hotstore.ProjectKey, g knowledge.Graph) error {
+func (s *fakeStore) UpdateKnowledge(_ context.Context, key hotstore.ProjectKey, fn func(knowledge.Graph) (knowledge.Graph, error)) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.readErr != nil {
+		return s.readErr
+	}
+	next, err := fn(s.graphs[key.String()])
+	if err != nil {
+		return err
+	}
 	if s.writeErr != nil {
 		return s.writeErr
 	}
-	s.graphs[key.String()] = g
+	s.graphs[key.String()] = next
 	return nil
 }
 
 func (s *fakeStore) ListProjects(_ context.Context) ([]hotstore.ProjectKey, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.listProjErr != nil {
 		return nil, s.listProjErr
 	}
 	seen := map[string]bool{}
-	var out []hotstore.ProjectKey
-	for _, m := range []map[string]bool{keysOfEpisodes(s), keysOfGraphs(s)} {
-		for k := range m {
-			if seen[k] {
-				continue
-			}
-			seen[k] = true
-			parts := strings.SplitN(k, "/", 3)
-			out = append(out, hotstore.ProjectKey{Workspace: parts[0], Team: parts[1], Project: parts[2]})
-		}
+	for k := range s.episodes {
+		seen[k] = true
+	}
+	for k := range s.graphs {
+		seen[k] = true
+	}
+	out := make([]hotstore.ProjectKey, 0, len(seen))
+	for k := range seen {
+		parts := strings.SplitN(k, "/", 3)
+		out = append(out, hotstore.ProjectKey{Workspace: parts[0], Team: parts[1], Project: parts[2]})
 	}
 	return out, nil
 }
 
-func keysOfEpisodes(s *fakeStore) map[string]bool {
-	out := map[string]bool{}
-	for k := range s.episodes {
-		out[k] = true
-	}
-	return out
-}
-
-func keysOfGraphs(s *fakeStore) map[string]bool {
-	out := map[string]bool{}
-	for k := range s.graphs {
-		out[k] = true
-	}
-	return out
-}
-
 func (s *fakeStore) Manifest(_ context.Context) (hotstore.Manifest, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.manifestErr != nil {
 		return hotstore.Manifest{}, s.manifestErr
 	}
@@ -224,6 +259,8 @@ func (s *fakeStore) Manifest(_ context.Context) (hotstore.Manifest, error) {
 }
 
 func (s *fakeStore) UpdateManifest(_ context.Context, fn func(hotstore.Manifest) (hotstore.Manifest, error)) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	m, err := fn(s.manifest)
 	if err != nil {
 		return err
@@ -233,7 +270,9 @@ func (s *fakeStore) UpdateManifest(_ context.Context, fn func(hotstore.Manifest)
 }
 
 func (s *fakeStore) MarkDirty(_ context.Context, key hotstore.ProjectKey, plane hotstore.Plane) error {
-	fk := rehydrate.FileKey(plane, key)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	fk := hotstore.ManifestFileKey(plane, key)
 	s.dirtyMarks = append(s.dirtyMarks, fk)
 	fs := s.manifest.Files[fk]
 	fs.Dirty = true
@@ -241,15 +280,7 @@ func (s *fakeStore) MarkDirty(_ context.Context, key hotstore.ProjectKey, plane 
 	return nil
 }
 
-func (s *fakeStore) FileInfo(_ context.Context, key hotstore.ProjectKey, plane hotstore.Plane) (int64, time.Time, error) {
-	mt, ok := s.mtimes[rehydrate.FileKey(plane, key)]
-	if !ok {
-		return 0, time.Time{}, hotstore.ErrNotFound
-	}
-	return 1, mt, nil
-}
-
-// fakeIndex is an in-memory search.Index.
+// fakeIndex is an in-memory EpisodeIndex.
 type fakeIndex struct {
 	indexed   map[string][]episodic.Record
 	hits      []search.Hit
@@ -257,12 +288,11 @@ type fakeIndex struct {
 	searchErr error
 }
 
+var _ EpisodeIndex = (*fakeIndex)(nil)
+
 func newFakeIndex() *fakeIndex {
 	return &fakeIndex{indexed: map[string][]episodic.Record{}}
 }
-
-func (f *fakeIndex) Ping(context.Context) error        { return nil }
-func (f *fakeIndex) EnsureIndex(context.Context) error { return nil }
 
 func (f *fakeIndex) IndexRecords(_ context.Context, key hotstore.ProjectKey, recs []episodic.Record) error {
 	if f.indexErr != nil {
@@ -272,8 +302,6 @@ func (f *fakeIndex) IndexRecords(_ context.Context, key hotstore.ProjectKey, rec
 	return nil
 }
 
-func (f *fakeIndex) DeleteRecords(context.Context, hotstore.ProjectKey, []string) error { return nil }
-
 func (f *fakeIndex) Search(_ context.Context, _ hotstore.ProjectKey, _ search.Query) ([]search.Hit, error) {
 	if f.searchErr != nil {
 		return nil, f.searchErr
@@ -281,11 +309,11 @@ func (f *fakeIndex) Search(_ context.Context, _ hotstore.ProjectKey, _ search.Qu
 	return f.hits, nil
 }
 
-func (f *fakeIndex) DocCount(context.Context, hotstore.ProjectKey) (int, error) { return 0, nil }
-func (f *fakeIndex) Drop(context.Context) error                                 { return nil }
-
-// fakeGraph is an in-memory graph.Store.
+// fakeGraph is an in-memory KnowledgeGraph.
 type fakeGraph struct {
+	// mu guards the mirrored collections for the same reason as fakeIDs.mu.
+	mu sync.Mutex
+
 	nodes  map[string][]knowledge.Node
 	edges  map[string][]knowledge.Edge
 	found  []knowledge.Node
@@ -299,13 +327,15 @@ type fakeGraph struct {
 	deleteErr     error
 }
 
+var _ KnowledgeGraph = (*fakeGraph)(nil)
+
 func newFakeGraph() *fakeGraph {
 	return &fakeGraph{nodes: map[string][]knowledge.Node{}, edges: map[string][]knowledge.Edge{}}
 }
 
-func (f *fakeGraph) Ping(context.Context) error { return nil }
-
 func (f *fakeGraph) UpsertNodes(_ context.Context, key hotstore.ProjectKey, nodes []knowledge.Node) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if f.upsertNodeErr != nil {
 		return f.upsertNodeErr
 	}
@@ -314,6 +344,8 @@ func (f *fakeGraph) UpsertNodes(_ context.Context, key hotstore.ProjectKey, node
 }
 
 func (f *fakeGraph) UpsertEdges(_ context.Context, key hotstore.ProjectKey, edges []knowledge.Edge) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if f.upsertEdgeErr != nil {
 		return f.upsertEdgeErr
 	}
@@ -322,6 +354,8 @@ func (f *fakeGraph) UpsertEdges(_ context.Context, key hotstore.ProjectKey, edge
 }
 
 func (f *fakeGraph) DeleteNode(_ context.Context, _ hotstore.ProjectKey, id string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if f.deleteErr != nil {
 		return f.deleteErr
 	}
@@ -343,14 +377,7 @@ func (f *fakeGraph) Neighborhood(_ context.Context, _ hotstore.ProjectKey, _ str
 	return f.sub, nil
 }
 
-func (f *fakeGraph) SupersedeChain(context.Context, hotstore.ProjectKey, string) ([]knowledge.Node, error) {
-	return nil, nil
-}
-
-func (f *fakeGraph) NodeCount(context.Context, hotstore.ProjectKey) (int, error) { return 0, nil }
-func (f *fakeGraph) Clear(context.Context) error                                 { return nil }
-
-// fakeDocuments is a document.Service double.
+// fakeDocuments is a DocumentIngestor double.
 type fakeDocuments struct {
 	result     document.IngestResult
 	ingestErr  error
@@ -362,9 +389,14 @@ type fakeDocuments struct {
 	lastUpload []byte
 }
 
+var _ DocumentIngestor = (*fakeDocuments)(nil)
+
 func (f *fakeDocuments) Ingest(_ context.Context, _ hotstore.ProjectKey, filename string, data io.Reader) (document.IngestResult, error) {
 	f.lastName = filename
-	body, _ := io.ReadAll(data)
+	body, err := io.ReadAll(data)
+	if err != nil {
+		return document.IngestResult{}, err
+	}
 	f.lastUpload = body
 	if f.ingestErr != nil {
 		return document.IngestResult{}, f.ingestErr
@@ -386,7 +418,7 @@ func (f *fakeDocuments) Chunks(context.Context, string) ([]episodic.Record, erro
 	return f.chunks, nil
 }
 
-// fakeConsolidator is a consolidate.Consolidator double.
+// fakeConsolidator is a Consolidator double.
 type fakeConsolidator struct {
 	report   consolidate.Report
 	err      error
@@ -394,25 +426,27 @@ type fakeConsolidator struct {
 	calls    int
 }
 
+var _ Consolidator = (*fakeConsolidator)(nil)
+
 func (f *fakeConsolidator) Run(_ context.Context, opts consolidate.Options) (consolidate.Report, error) {
 	f.calls++
 	f.lastOpts = opts
 	return f.report, f.err
 }
 
-// fakeRehydrator is a rehydrate.Rehydrator double.
+// fakeRehydrator is a Rehydrator double.
 type fakeRehydrator struct {
-	drift        rehydrate.DriftReport
-	driftErr     error
-	report       rehydrate.Report
-	allErr       error
-	projErr      error
-	gateErr      error
-	gateCalls    []string
-	allCalls     int
-	lastVerify   bool
-	projectCalls []string
+	drift      rehydrate.DriftReport
+	driftErr   error
+	report     rehydrate.Report
+	allErr     error
+	gateErr    error
+	gateCalls  []string
+	allCalls   int
+	lastVerify bool
 }
+
+var _ Rehydrator = (*fakeRehydrator)(nil)
 
 func (f *fakeRehydrator) CheckDrift(context.Context) (rehydrate.DriftReport, error) {
 	return f.drift, f.driftErr
@@ -424,31 +458,22 @@ func (f *fakeRehydrator) RehydrateAll(_ context.Context, verify bool) (rehydrate
 	return f.report, f.allErr
 }
 
-func (f *fakeRehydrator) RehydrateProject(_ context.Context, key hotstore.ProjectKey) (rehydrate.Report, error) {
-	f.projectCalls = append(f.projectCalls, key.String())
-	return f.report, f.projErr
-}
-
 func (f *fakeRehydrator) StatGate(_ context.Context, key hotstore.ProjectKey) error {
 	f.gateCalls = append(f.gateCalls, key.String())
 	return f.gateErr
 }
 
-// fakeArchiver is a cold.Archiver double.
+// fakeArchiver is a ColdArchive double.
 type fakeArchiver struct {
-	archived  map[string]episodic.Record
-	fetchErr  error
-	blobErr   error
-	exists    bool
-	existsErr error
+	archived map[string]episodic.Record
+	fetchErr error
+	blobErr  error
 }
+
+var _ ColdArchive = (*fakeArchiver)(nil)
 
 func newFakeArchiver() *fakeArchiver {
 	return &fakeArchiver{archived: map[string]episodic.Record{}}
-}
-
-func (f *fakeArchiver) ArchiveEpisodes(context.Context, hotstore.ProjectKey, string, []episodic.Record) (string, error) {
-	return "", nil
 }
 
 func (f *fakeArchiver) FetchArchivedEpisode(_ context.Context, _ hotstore.ProjectKey, id string) (episodic.Record, error) {
@@ -457,57 +482,49 @@ func (f *fakeArchiver) FetchArchivedEpisode(_ context.Context, _ hotstore.Projec
 	}
 	rec, ok := f.archived[id]
 	if !ok {
-		return episodic.Record{}, cold.ErrNotFound
+		return episodic.Record{}, errs.NotFound("cold.FetchArchivedEpisode", "episode", id)
 	}
 	return rec, nil
 }
 
-func (f *fakeArchiver) SnapshotKnowledge(context.Context, hotstore.ProjectKey, knowledge.Graph, time.Time) (string, string, error) {
-	return "", "", nil
-}
-
-func (f *fakeArchiver) UploadBlob(context.Context, string, io.Reader) (string, error) {
-	return "", nil
-}
-
 // FetchBlob doubles as the /status cold-reachability probe. blobErr models a
-// bucket-level failure (NoSuchBucket); the default ErrNotFound models a live
+// bucket-level failure (NoSuchBucket); the default not-found models a live
 // bucket that simply does not hold the probe key.
-func (f *fakeArchiver) FetchBlob(context.Context, string) (io.ReadCloser, error) {
+func (f *fakeArchiver) FetchBlob(_ context.Context, sha string) (io.ReadCloser, error) {
 	if f.blobErr != nil {
 		return nil, f.blobErr
 	}
-	return nil, cold.ErrNotFound
-}
-
-func (f *fakeArchiver) BlobExists(context.Context, string) (bool, error) {
-	if f.existsErr != nil {
-		return false, f.existsErr
-	}
-	return f.exists, nil
+	return nil, errs.NotFound("cold.FetchBlob", "blob", sha)
 }
 
 // --- harness ----------------------------------------------------------------
 
-// newTestServer builds a Server whose deps default to working fakes; mutate the
-// returned Deps copy before calling when a nil/failing collaborator is wanted.
-func newTestServer(t *testing.T, mutate func(*Deps)) (*Server, http.Handler) {
+// newTestServer builds a Server whose collaborators default to working fakes;
+// mutate the Config before construction when a nil or failing one is wanted.
+func newTestServer(t *testing.T, mutate func(*Config)) (*Server, http.Handler) {
 	t.Helper()
-	deps := Deps{
-		Store:        newFakeStore(),
-		Index:        newFakeIndex(),
-		Graph:        newFakeGraph(),
-		Documents:    &fakeDocuments{},
-		Consolidator: &fakeConsolidator{},
-		Rehydrator:   &fakeRehydrator{},
-		Archiver:     newFakeArchiver(),
-		Clock:        fakeClock{now: fixedNow},
-		Logger:       discardLogger(),
+	cfg := Config{
+		ListenAddr:      testListenAddr,
+		S3Bucket:        testS3Bucket,
+		EpisodicTTLDays: testTTLDays,
+		Store:           newFakeStore(),
+		Index:           newFakeIndex(),
+		Graph:           newFakeGraph(),
+		Documents:       &fakeDocuments{},
+		Consolidator:    &fakeConsolidator{},
+		Rehydrator:      &fakeRehydrator{},
+		Archiver:        newFakeArchiver(),
+		Clock:           fakeClock{now: fixedNow},
+		IDs:             &fakeIDs{},
+		Logger:          discardLogger(),
 	}
 	if mutate != nil {
-		mutate(&deps)
+		mutate(&cfg)
 	}
-	srv := New(testConfig(), deps)
+	srv, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
 	return srv, srv.Router()
 }
 
@@ -564,5 +581,13 @@ func assertStatus(t *testing.T, rec *httptest.ResponseRecorder, want int) {
 	}
 }
 
-// errBoom is the generic collaborator failure used across tests.
+// errBoom is an unclassified collaborator failure: it carries no errs.Kind, so
+// it exercises the "internal / unclassified" row of the §2.2 mapping table.
 var errBoom = errors.New("boom")
+
+// errIndexDown / errGraphDown are the degraded-mode signal: KindUnavailable is
+// what a derived store returns when it cannot be reached.
+var (
+	errIndexDown = errs.Unavailable("search.Search", errBoom)
+	errGraphDown = errs.Unavailable("graph.Search", errBoom)
+)

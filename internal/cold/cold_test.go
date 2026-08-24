@@ -2,64 +2,113 @@ package cold
 
 import (
 	"errors"
-	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
-	"github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"github.com/drakejin/memory-mcp/internal/errs"
 	"github.com/drakejin/memory-mcp/internal/hotstore"
 )
 
-// codedError stands in for a smithy API error without importing smithy-go
-// (which is only an indirect dependency).
-type codedError struct {
-	code string
+// isolateAWSEnv points the SDK at an empty shared-config file so New is
+// hermetic: no ambient profile, no credentials file, no network.
+func isolateAWSEnv(t *testing.T) {
+	t.Helper()
+	empty := filepath.Join(t.TempDir(), "config")
+	if err := os.WriteFile(empty, nil, 0o600); err != nil {
+		t.Fatalf("write empty aws config: %v", err)
+	}
+	t.Setenv("AWS_PROFILE", "")
+	t.Setenv("AWS_CONFIG_FILE", empty)
+	t.Setenv("AWS_SHARED_CREDENTIALS_FILE", empty)
+	t.Setenv("AWS_REGION", "")
+	t.Setenv("AWS_EC2_METADATA_DISABLED", "true")
 }
 
-func (e codedError) Error() string     { return "api error " + e.code }
-func (e codedError) ErrorCode() string { return e.code }
+func validConfig() Config {
+	return Config{Bucket: "vms-memory-mcp", Region: "ap-northeast-2", Username: "jin"}
+}
 
-// TestIsNotFoundErr pins the classification that makes a missing monthly batch
-// an empty slice instead of a hard failure (downloadBatch) and a missing blob
-// an ErrNotFound the document layer can fall back on. Misclassifying either
-// direction is a correctness bug, so both are covered.
-func TestIsNotFoundErr(t *testing.T) {
+func TestNewValidatesConfig(t *testing.T) {
 	tests := []struct {
-		name string
-		err  error
-		want bool
+		name    string
+		mutate  func(*Config)
+		wantErr error
 	}{
-		{name: "nil error", err: nil, want: false},
-		{name: "GetObject NoSuchKey", err: &types.NoSuchKey{}, want: true},
-		{name: "HeadObject NotFound", err: &types.NotFound{}, want: true},
+		{name: "complete config", mutate: func(*Config) {}},
 		{
-			name: "wrapped NoSuchKey still classified",
-			err:  fmt.Errorf("cold: get s3://b/k: %w", &types.NoSuchKey{}),
-			want: true,
+			name:    "missing bucket",
+			mutate:  func(c *Config) { c.Bucket = "" },
+			wantErr: errs.ErrInvalid,
 		},
 		{
-			name: "wrapped NotFound still classified",
-			err:  fmt.Errorf("operation error S3: HeadObject: %w", &types.NotFound{}),
-			want: true,
+			// The profile's default region differs from the bucket's; inheriting
+			// it silently yields PermanentRedirect on every call (§8).
+			name:    "missing region",
+			mutate:  func(c *Config) { c.Region = "" },
+			wantErr: errs.ErrInvalid,
 		},
-		{name: "coded NoSuchKey", err: codedError{code: "NoSuchKey"}, want: true},
-		{name: "coded NotFound", err: codedError{code: "NotFound"}, want: true},
-		{name: "coded 404", err: codedError{code: "404"}, want: true},
-		// Everything below must NOT be swallowed as "missing": treating an
-		// auth/redirect/throttle failure as an empty batch would silently drop
-		// already-archived records on the next merge-and-overwrite.
-		{name: "access denied is not missing", err: codedError{code: "AccessDenied"}, want: false},
-		{name: "permanent redirect is not missing", err: codedError{code: "PermanentRedirect"}, want: false},
-		{name: "slow down is not missing", err: codedError{code: "SlowDown"}, want: false},
-		{name: "no such bucket is not missing", err: codedError{code: "NoSuchBucket"}, want: false},
-		{name: "plain error is not missing", err: errors.New("connection reset"), want: false},
+		{
+			name:    "missing username",
+			mutate:  func(c *Config) { c.Username = "" },
+			wantErr: errs.ErrInvalid,
+		},
+		{
+			name:    "unknown shared-config profile",
+			mutate:  func(c *Config) { c.Profile = "no-such-profile-for-tests" },
+			wantErr: errs.ErrUnavailable,
+		},
 	}
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := isNotFoundErr(tt.err); got != tt.want {
-				t.Errorf("isNotFoundErr(%v) = %v, want %v", tt.err, got, tt.want)
+			isolateAWSEnv(t)
+			cfg := validConfig()
+			tt.mutate(&cfg)
+
+			got, err := New(cfg)
+			if tt.wantErr != nil {
+				if !errors.Is(err, tt.wantErr) {
+					t.Fatalf("err = %v, want %v", err, tt.wantErr)
+				}
+				if got != nil {
+					t.Error("no Client may be returned alongside an error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+			if got == nil {
+				t.Fatal("New returned a nil Client")
 			}
 		})
+	}
+}
+
+// TestNewBindsUsernameAndBucket proves New wires the config through to the key
+// layout without dialling S3 (the failure below is the fake, not the network).
+func TestNewBindsUsernameAndBucket(t *testing.T) {
+	isolateAWSEnv(t)
+
+	got, err := New(validConfig())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	c, ok := got.(*client)
+	if !ok {
+		t.Fatalf("New returned %T, want *client", got)
+	}
+	if c.username != "jin" {
+		t.Errorf("username = %q, want %q", c.username, "jin")
+	}
+	objects, ok := c.objects.(*s3Objects)
+	if !ok {
+		t.Fatalf("object store is %T, want *s3Objects", c.objects)
+	}
+	if objects.bucket != "vms-memory-mcp" {
+		t.Errorf("bucket = %q, want %q", objects.bucket, "vms-memory-mcp")
 	}
 }
 
@@ -118,7 +167,7 @@ func TestKeyLayout(t *testing.T) {
 		},
 		{
 			name: "episode archive prefix keeps trailing slash",
-			got:  EpisodeArchivePrefix("jin", key),
+			got:  episodeArchivePrefix("jin", key),
 			want: "jin/episodic/vms/core/memory/",
 		},
 		{

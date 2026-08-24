@@ -1,31 +1,31 @@
 package server
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"slices"
-	"strconv"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/drakejin/memory-mcp/internal/graph"
+	"github.com/drakejin/memory-mcp/internal/episodic"
+	"github.com/drakejin/memory-mcp/internal/errs"
 	"github.com/drakejin/memory-mcp/internal/hotstore"
 	"github.com/drakejin/memory-mcp/internal/knowledge"
-	"github.com/drakejin/memory-mcp/internal/ulid"
+	"github.com/drakejin/memory-mcp/internal/server/apierr"
 )
 
-// Seams to the knowledge package's pure graph operations. Production always
-// uses the real functions; unit tests may substitute fakes so server tests
-// stay independent of sibling-package progress.
-var (
-	supersedeGraph = knowledge.Supersede
-	transitionNode = knowledge.Transition
+// PATCH operations of §7. set_state names the target explicitly; deprecate is
+// the shorthand that always targets deprecated and demands a reason.
+const (
+	opSetState  = "set_state"
+	opDeprecate = "deprecate"
 )
 
 // CreateNodeRequest is the POST body for knowledge node creation. Supersedes
 // lists node ids this new node replaces (§7 supersede support); the state
-// machine work happens via knowledge.Supersede.
+// machine work happens in knowledge.Supersede.
 type CreateNodeRequest struct {
 	Kind        knowledge.NodeKind `json:"kind"`
 	Name        string             `json:"name"`
@@ -66,25 +66,25 @@ type PurgeNodeResponse struct {
 }
 
 // validate applies §2.2 invariants at the HTTP boundary.
-func (req CreateNodeRequest) validate() error {
-	if !isNodeKind(req.Kind) {
-		return errors.New("kind must be one of entity|fact|lesson|preference|document")
+func (req CreateNodeRequest) validate() *apierr.Error {
+	if !knowledge.ValidNodeKind(req.Kind) {
+		return badRequest("kind must be one of entity|fact|lesson|preference|document")
 	}
 	if req.Name == "" {
-		return errors.New("name must not be empty")
+		return badRequest("name must not be empty")
 	}
-	if !isTrust(req.Trust) {
-		return errors.New("trust must be one of user-stated|agent-inferred|imported")
+	if !knowledge.ValidTrust(req.Trust) {
+		return badRequest("trust must be one of user-stated|agent-inferred|imported")
 	}
-	if err := validateULIDs(req.Provenance, "provenance"); err != nil {
-		return err
+	if apiErr := validateULIDs(req.Provenance, "provenance"); apiErr != nil {
+		return apiErr
 	}
-	if err := validateULIDs(req.Supersedes, "supersedes"); err != nil {
-		return err
+	if apiErr := validateULIDs(req.Supersedes, "supersedes"); apiErr != nil {
+		return apiErr
 	}
 	if req.ReviewAfter != "" {
 		if _, err := time.Parse(time.RFC3339, req.ReviewAfter); err != nil {
-			return errors.New("review_after must be RFC3339 or empty")
+			return badRequest("review_after must be RFC3339 or empty")
 		}
 	}
 	return nil
@@ -106,32 +106,38 @@ func (req CreateNodeRequest) validate() error {
 //	@Router		/v1/{ws}/{team}/{proj}/knowledge/nodes [post]
 //
 // Contract: validate, assign ULID, apply knowledge.Supersede against the hot
-// graph, atomic WriteKnowledge, then best-effort Neo4j MERGE (degraded note on
+// graph, atomic UpdateKnowledge, then best-effort Neo4j MERGE and the
+// consolidation promotion of the provenance episodes (degraded notes on
 // failure). No judgement calls server-side — supersede decisions are the
 // agent's (§0 principle 2).
 func (s *Server) handleCreateNode(w http.ResponseWriter, r *http.Request) {
 	key := projectKey(r)
-	if err := validateProjectKey(key); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+	if apiErr := validateProjectKey(key); apiErr != nil {
+		writeAPIError(w, s.log, apiErr)
 		return
 	}
-	if s.deps.Store == nil {
-		writeError(w, http.StatusServiceUnavailable, "hot store unavailable")
+	if s.store == nil {
+		writeAPIError(w, s.log, unavailable(msgHotStoreUnavailable))
 		return
 	}
 	var req CreateNodeRequest
-	if err := decodeJSON(w, r, &req, false); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+	if apiErr := decodeJSON(w, r, &req, false); apiErr != nil {
+		writeAPIError(w, s.log, apiErr)
 		return
 	}
-	if err := req.validate(); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+	if apiErr := req.validate(); apiErr != nil {
+		writeAPIError(w, s.log, apiErr)
 		return
 	}
 
-	now := s.deps.Clock.Now().UTC()
+	now := s.clock.Now().UTC()
+	id, err := s.ids.GenerateAt(now.UnixMilli())
+	if err != nil {
+		writeAPIError(w, s.log, apierr.From(err))
+		return
+	}
 	node := knowledge.Node{
-		ID:          ulid.At(now.UnixMilli()),
+		ID:          id,
 		Kind:        req.Kind,
 		Name:        req.Name,
 		Body:        req.Body,
@@ -145,105 +151,121 @@ func (s *Server) handleCreateNode(w http.ResponseWriter, r *http.Request) {
 		ReviewAfter: req.ReviewAfter,
 	}
 
-	g, err := s.deps.Store.ReadKnowledge(r.Context(), key)
+	// Read, decide and write inside one UpdateKnowledge closure: the document
+	// is replaced wholesale, so a read-then-write pair would let a concurrent
+	// creation drop this node from hot while both reach Neo4j — exactly the
+	// derived-only content §0 principle 1 forbids.
+	var stored knowledge.Node
+	var affected []knowledge.Node
+	var newEdges []knowledge.Edge
+	err = s.store.UpdateKnowledge(r.Context(), key, func(g knowledge.Graph) (knowledge.Graph, error) {
+		var next knowledge.Graph
+		if len(req.Supersedes) > 0 {
+			// knowledge owns the state machine: a missing target is its
+			// NotFound, a self- or duplicate-supersede its Invalid, and apierr
+			// maps both.
+			var err error
+			next, err = knowledge.Supersede(g, node, req.Supersedes, now)
+			if err != nil {
+				return g, err
+			}
+		} else {
+			next = knowledge.Graph{
+				Nodes: append(slices.Clone(g.Nodes), node),
+				Edges: slices.Clone(g.Edges),
+			}
+		}
+		stored = findGraphNode(next, node.ID, node)
+		affected = affectedNodes(next, node.ID, req.Supersedes)
+		newEdges = diffEdges(g, next)
+		return next, nil
+	})
 	if err != nil {
-		s.deps.Logger.Error("knowledge read failed", "project", key.String(), "error", err)
-		writeError(w, http.StatusInternalServerError, "failed to read knowledge graph")
+		writeAPIError(w, s.log, apierr.From(err))
 		return
 	}
 
-	var next knowledge.Graph
-	if len(req.Supersedes) > 0 {
-		next, err = supersedeGraph(g, node, req.Supersedes, now)
-		if errors.Is(err, knowledge.ErrNodeNotFound) {
-			writeError(w, http.StatusNotFound, "superseded node not found")
-			return
-		}
-		if err != nil {
-			s.deps.Logger.Error("supersede failed", "project", key.String(), "error", err)
-			writeError(w, http.StatusInternalServerError, "supersede failed")
-			return
-		}
-	} else {
-		next = knowledge.Graph{
-			Nodes: append(slices.Clone(g.Nodes), node),
-			Edges: slices.Clone(g.Edges),
-		}
-	}
-	if err := s.deps.Store.WriteKnowledge(r.Context(), key, next); err != nil {
-		s.deps.Logger.Error("knowledge hot write failed", "project", key.String(), "error", err)
-		writeError(w, http.StatusInternalServerError, "failed to persist knowledge node")
-		return
-	}
-
-	stored := findGraphNode(next, node.ID, node)
-	affected := affectedNodes(next, node.ID, req.Supersedes)
-	newEdges := diffEdges(g, next)
-	degraded := s.mirrorKnowledge(r, key, affected, newEdges)
-	writeJSON(w, http.StatusCreated, NodeResponse{Node: stored, Degraded: degraded})
+	degraded := s.mirrorKnowledge(r.Context(), key, affected, newEdges)
+	degraded = append(degraded, s.promoteProvenance(r.Context(), key, stored.Provenance)...)
+	writeJSON(w, s.log, http.StatusCreated, NodeResponse{Node: stored, Degraded: degraded})
 }
 
-// findGraphNode returns the node with id from g, or fallback when absent.
-func findGraphNode(g knowledge.Graph, id string, fallback knowledge.Node) knowledge.Node {
-	for _, n := range g.Nodes {
-		if n.ID == id {
-			return n
+// promoteProvenance closes the §3 consolidation loop. Distillation is the
+// agent's job: it reads episodes, writes the knowledge node, and names the
+// episodes it distilled in provenance. That naming IS the promotion §3
+// describes ("에이전트가 episode들을 증류해 knowledge 승격 — POST /knowledge,
+// provenance 링크"), and §3.1 reads its result, consolidated=true, as the
+// precondition for a record ever sinking to cold.
+//
+// Nothing is judged here (§0 principle 2): the server only records the
+// consequence of a statement the agent made. Without it no API path sets the
+// flag at all, so aging never fires, hot files grow past the §3.1 pressure
+// thresholds with no relief, and /v1/status reports a stale_unconsolidated
+// count no legitimate client action can reduce.
+//
+// Ids that name no hot record of this project — already aged to cold, or
+// belonging to another project — are skipped rather than failing a node that is
+// already written. So is a record already consolidated: re-promoting it would
+// rewrite the hot file for nothing. The whole step is best-effort: the hot
+// knowledge write has succeeded, so a bookkeeping failure is a degraded note
+// (§5), never a failed creation.
+func (s *Server) promoteProvenance(ctx context.Context, key hotstore.ProjectKey, provenance []string) []string {
+	if len(provenance) == 0 {
+		return nil
+	}
+	recs, err := s.store.ListEpisodes(ctx, key)
+	if err != nil {
+		s.log.Warn("provenance promotion: list episodes failed", "project", key.String(), "error", err)
+		return []string{degradedPromotion}
+	}
+	named := make(map[string]bool, len(provenance))
+	for _, id := range provenance {
+		named[id] = true
+	}
+	pending := make([]string, 0, len(provenance))
+	for _, rec := range recs {
+		if named[rec.ID] && !rec.Consolidated {
+			pending = append(pending, rec.ID)
 		}
 	}
-	return fallback
-}
-
-// affectedNodes collects the new node plus every superseded node in its
-// post-transition form, for a minimal best-effort MERGE.
-func affectedNodes(g knowledge.Graph, newID string, superseded []string) []knowledge.Node {
-	want := map[string]bool{newID: true}
-	for _, id := range superseded {
-		want[id] = true
+	if len(pending) == 0 {
+		return nil
 	}
-	var out []knowledge.Node
-	for _, n := range g.Nodes {
-		if want[n.ID] {
-			out = append(out, n)
-		}
+	err = s.store.UpdateEpisodes(ctx, key, pending, func(rec episodic.Record) episodic.Record {
+		rec.Consolidated = true
+		return rec
+	})
+	if err != nil {
+		s.log.Warn("provenance promotion: mark consolidated failed",
+			"project", key.String(), "episodes", len(pending), "error", err)
+		return []string{degradedPromotion}
 	}
-	return out
-}
-
-// diffEdges returns edges present in next but not in prev (from/to/rel match).
-func diffEdges(prev, next knowledge.Graph) []knowledge.Edge {
-	seen := make(map[[3]string]bool, len(prev.Edges))
-	for _, e := range prev.Edges {
-		seen[[3]string{e.From, e.To, string(e.Rel)}] = true
-	}
-	var out []knowledge.Edge
-	for _, e := range next.Edges {
-		if !seen[[3]string{e.From, e.To, string(e.Rel)}] {
-			out = append(out, e)
-		}
-	}
-	return out
+	// consolidated is an indexed field: a hot-only flip would leave search
+	// reporting the record as still undistilled.
+	s.convergeEpisodes(ctx, key, pending)
+	return nil
 }
 
 // mirrorKnowledge best-effort MERGEs nodes/edges into Neo4j and maintains the
 // manifest. Returns degraded notes for the response envelope (§5).
-func (s *Server) mirrorKnowledge(r *http.Request, key hotstore.ProjectKey, nodes []knowledge.Node, edges []knowledge.Edge) []string {
-	if s.deps.Graph == nil {
-		s.markDirty(r.Context(), key, hotstore.PlaneKnowledge)
+func (s *Server) mirrorKnowledge(ctx context.Context, key hotstore.ProjectKey, nodes []knowledge.Node, edges []knowledge.Edge) []string {
+	if s.graph == nil {
+		s.markDirty(ctx, key, hotstore.PlaneKnowledge)
 		return []string{degradedGraph}
 	}
-	err := error(nil)
+	var err error
 	if len(nodes) > 0 {
-		err = s.deps.Graph.UpsertNodes(r.Context(), key, nodes)
+		err = s.graph.UpsertNodes(ctx, key, nodes)
 	}
 	if err == nil && len(edges) > 0 {
-		err = s.deps.Graph.UpsertEdges(r.Context(), key, edges)
+		err = s.graph.UpsertEdges(ctx, key, edges)
 	}
 	if err != nil {
-		s.deps.Logger.Warn("knowledge graph mirror failed; degraded", "project", key.String(), "error", err)
-		s.markDirty(r.Context(), key, hotstore.PlaneKnowledge)
+		s.log.Warn("knowledge graph mirror failed; degraded", "project", key.String(), "error", err)
+		s.markDirty(ctx, key, hotstore.PlaneKnowledge)
 		return []string{degradedGraph}
 	}
-	s.markIndexed(r.Context(), key, hotstore.PlaneKnowledge)
+	s.markIndexed(ctx, key, hotstore.PlaneKnowledge)
 	return nil
 }
 
@@ -266,79 +288,40 @@ func (s *Server) mirrorKnowledge(r *http.Request, key hotstore.ProjectKey, nodes
 // best-effort MERGE.
 func (s *Server) handleCreateEdge(w http.ResponseWriter, r *http.Request) {
 	key := projectKey(r)
-	if err := validateProjectKey(key); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+	if apiErr := validateProjectKey(key); apiErr != nil {
+		writeAPIError(w, s.log, apiErr)
 		return
 	}
-	if s.deps.Store == nil {
-		writeError(w, http.StatusServiceUnavailable, "hot store unavailable")
+	if s.store == nil {
+		writeAPIError(w, s.log, unavailable(msgHotStoreUnavailable))
 		return
 	}
 	var edge knowledge.Edge
-	if err := decodeJSON(w, r, &edge, false); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+	if apiErr := decodeJSON(w, r, &edge, false); apiErr != nil {
+		writeAPIError(w, s.log, apiErr)
 		return
 	}
-	if !ulid.IsULID(edge.From) || !ulid.IsULID(edge.To) {
-		writeError(w, http.StatusBadRequest, "from and to must be node ULIDs")
-		return
-	}
-	if !isRel(edge.Rel) {
-		writeError(w, http.StatusBadRequest, "rel must be one of relates_to|derived_from|supersedes|about")
-		return
-	}
-	if edge.Confidence < 0 || edge.Confidence > 1 {
-		writeError(w, http.StatusBadRequest, "confidence must be within [0,1]")
-		return
-	}
-	if err := validateULIDs(edge.Provenance, "provenance"); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+	if apiErr := validateEdge(edge); apiErr != nil {
+		writeAPIError(w, s.log, apiErr)
 		return
 	}
 	edge.Provenance = normalizeStrings(edge.Provenance)
 
-	g, err := s.deps.Store.ReadKnowledge(r.Context(), key)
+	// The endpoint check and the insert share one closure so an edge can never
+	// be written against a node a concurrent purge has already removed. The
+	// transport error returned from here survives apierr.From unchanged.
+	err := s.store.UpdateKnowledge(r.Context(), key, func(g knowledge.Graph) (knowledge.Graph, error) {
+		if !nodeExists(g, edge.From) || !nodeExists(g, edge.To) {
+			return g, notFound("edge endpoint node not found")
+		}
+		return upsertEdge(g, edge), nil
+	})
 	if err != nil {
-		s.deps.Logger.Error("knowledge read failed", "project", key.String(), "error", err)
-		writeError(w, http.StatusInternalServerError, "failed to read knowledge graph")
+		writeAPIError(w, s.log, apierr.From(err))
 		return
 	}
-	if !nodeExists(g, edge.From) || !nodeExists(g, edge.To) {
-		writeError(w, http.StatusNotFound, "edge endpoint node not found")
-		return
-	}
-
-	// Idempotent on (from,to,rel): re-posting replaces the edge.
-	next := knowledge.Graph{Nodes: slices.Clone(g.Nodes), Edges: make([]knowledge.Edge, 0, len(g.Edges)+1)}
-	replaced := false
-	for _, e := range g.Edges {
-		if e.From == edge.From && e.To == edge.To && e.Rel == edge.Rel {
-			next.Edges = append(next.Edges, edge)
-			replaced = true
-			continue
-		}
-		next.Edges = append(next.Edges, e)
-	}
-	if !replaced {
-		next.Edges = append(next.Edges, edge)
-	}
-
-	if err := s.deps.Store.WriteKnowledge(r.Context(), key, next); err != nil {
-		s.deps.Logger.Error("knowledge hot write failed", "project", key.String(), "error", err)
-		writeError(w, http.StatusInternalServerError, "failed to persist knowledge edge")
-		return
-	}
-	degraded := s.mirrorKnowledge(r, key, nil, []knowledge.Edge{edge})
-	writeJSON(w, http.StatusCreated, EdgeResponse{Edge: edge, Degraded: degraded})
-}
-
-func nodeExists(g knowledge.Graph, id string) bool {
-	for _, n := range g.Nodes {
-		if n.ID == id {
-			return true
-		}
-	}
-	return false
+	degraded := s.mirrorKnowledge(r.Context(), key, nil, []knowledge.Edge{edge})
+	writeJSON(w, s.log, http.StatusCreated, EdgeResponse{Edge: edge, Degraded: degraded})
 }
 
 // handleSearchKnowledge godoc
@@ -357,37 +340,36 @@ func nodeExists(g knowledge.Graph, id string) bool {
 //	@Router		/v1/{ws}/{team}/{proj}/knowledge/search [get]
 func (s *Server) handleSearchKnowledge(w http.ResponseWriter, r *http.Request) {
 	key := projectKey(r)
-	if err := validateProjectKey(key); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+	if apiErr := validateProjectKey(key); apiErr != nil {
+		writeAPIError(w, s.log, apiErr)
 		return
 	}
-	q := r.URL.Query().Get("q")
+	q := r.URL.Query().Get(paramQuery)
 	if q == "" {
-		writeError(w, http.StatusBadRequest, "q is required")
+		writeAPIError(w, s.log, badRequest(paramQuery+" is required"))
 		return
 	}
-	includeArchived := r.URL.Query().Get("include_archived") == "true"
-	if s.deps.Graph == nil {
-		writeError(w, http.StatusServiceUnavailable, degradedGraph)
+	includeArchived := r.URL.Query().Get(paramIncludeArchived) == valueTrue
+	if s.graph == nil {
+		writeAPIError(w, s.log, unavailable(degradedGraph))
 		return
 	}
 
 	s.statGate(r.Context(), key)
 
-	nodes, err := s.deps.Graph.Search(r.Context(), key, q, includeArchived)
-	if errors.Is(err, graph.ErrUnavailable) {
-		writeError(w, http.StatusServiceUnavailable, degradedGraph)
+	nodes, err := s.graph.Search(r.Context(), key, q, includeArchived)
+	if errors.Is(err, errs.ErrUnavailable) {
+		writeAPIError(w, s.log, unavailable(degradedGraph).WithCause(err))
 		return
 	}
 	if err != nil {
-		s.deps.Logger.Error("knowledge search failed", "project", key.String(), "error", err)
-		writeError(w, http.StatusInternalServerError, "knowledge search failed")
+		writeAPIError(w, s.log, apierr.From(err))
 		return
 	}
 	if nodes == nil {
 		nodes = []knowledge.Node{}
 	}
-	writeJSON(w, http.StatusOK, nodes)
+	writeJSON(w, s.log, http.StatusOK, nodes)
 }
 
 // handleKnowledgeGraph godoc
@@ -406,42 +388,37 @@ func (s *Server) handleSearchKnowledge(w http.ResponseWriter, r *http.Request) {
 //	@Router		/v1/{ws}/{team}/{proj}/knowledge/graph [get]
 func (s *Server) handleKnowledgeGraph(w http.ResponseWriter, r *http.Request) {
 	key := projectKey(r)
-	if err := validateProjectKey(key); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+	if apiErr := validateProjectKey(key); apiErr != nil {
+		writeAPIError(w, s.log, apiErr)
 		return
 	}
-	entity := r.URL.Query().Get("entity")
+	entity := r.URL.Query().Get(paramEntity)
 	if entity == "" {
-		writeError(w, http.StatusBadRequest, "entity is required")
+		writeAPIError(w, s.log, badRequest(paramEntity+" is required"))
 		return
 	}
-	depth := defaultGraphDepth
-	if raw := r.URL.Query().Get("depth"); raw != "" {
-		parsed, err := strconv.Atoi(raw)
-		if err != nil || parsed < 1 || parsed > maxGraphDepth {
-			writeError(w, http.StatusBadRequest, "depth must be an integer between 1 and 10")
-			return
-		}
-		depth = parsed
+	depth, apiErr := parseDepthParam(r.URL.Query().Get(paramDepth))
+	if apiErr != nil {
+		writeAPIError(w, s.log, apiErr)
+		return
 	}
-	if s.deps.Graph == nil {
-		writeError(w, http.StatusServiceUnavailable, degradedGraph)
+	if s.graph == nil {
+		writeAPIError(w, s.log, unavailable(degradedGraph))
 		return
 	}
 
 	s.statGate(r.Context(), key)
 
-	sub, err := s.deps.Graph.Neighborhood(r.Context(), key, entity, depth)
-	if errors.Is(err, graph.ErrUnavailable) {
-		writeError(w, http.StatusServiceUnavailable, degradedGraph)
+	sub, err := s.graph.Neighborhood(r.Context(), key, entity, depth)
+	if errors.Is(err, errs.ErrUnavailable) {
+		writeAPIError(w, s.log, unavailable(degradedGraph).WithCause(err))
 		return
 	}
 	if err != nil {
-		s.deps.Logger.Error("knowledge traversal failed", "project", key.String(), "error", err)
-		writeError(w, http.StatusInternalServerError, "knowledge traversal failed")
+		writeAPIError(w, s.log, apierr.From(err))
 		return
 	}
-	writeJSON(w, http.StatusOK, sub)
+	writeJSON(w, s.log, http.StatusOK, sub)
 }
 
 // handlePatchNode godoc
@@ -461,85 +438,78 @@ func (s *Server) handleKnowledgeGraph(w http.ResponseWriter, r *http.Request) {
 //	@Failure	409		{object}	Envelope	"illegal state transition"
 //	@Router		/v1/{ws}/{team}/{proj}/knowledge/nodes/{id} [patch]
 //
-// Contract: knowledge.Transition enforces legality; hot write first, then
-// best-effort MERGE.
+// Contract: knowledge.Transition enforces legality (an illegal move is its
+// Conflict, hence 409); hot write first, then best-effort MERGE.
 func (s *Server) handlePatchNode(w http.ResponseWriter, r *http.Request) {
 	key := projectKey(r)
-	if err := validateProjectKey(key); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+	if apiErr := validateProjectKey(key); apiErr != nil {
+		writeAPIError(w, s.log, apiErr)
 		return
 	}
-	id := chi.URLParam(r, "id")
-	if !ulid.IsULID(id) {
-		writeError(w, http.StatusBadRequest, "id must be a ULID")
+	id := chi.URLParam(r, paramID)
+	if apiErr := validateULID(id); apiErr != nil {
+		writeAPIError(w, s.log, apiErr)
 		return
 	}
-	if s.deps.Store == nil {
-		writeError(w, http.StatusServiceUnavailable, "hot store unavailable")
+	if s.store == nil {
+		writeAPIError(w, s.log, unavailable(msgHotStoreUnavailable))
 		return
 	}
 	var req PatchNodeRequest
-	if err := decodeJSON(w, r, &req, false); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+	if apiErr := decodeJSON(w, r, &req, false); apiErr != nil {
+		writeAPIError(w, s.log, apiErr)
 		return
 	}
+	target, apiErr := req.targetState()
+	if apiErr != nil {
+		writeAPIError(w, s.log, apiErr)
+		return
+	}
+
+	// Lookup, transition and write share one closure: a patch computed against
+	// a stale snapshot would resurrect every node a concurrent write added
+	// after that snapshot was taken.
+	var updated knowledge.Node
+	err := s.store.UpdateKnowledge(r.Context(), key, func(g knowledge.Graph) (knowledge.Graph, error) {
+		idx := slices.IndexFunc(g.Nodes, func(n knowledge.Node) bool { return n.ID == id })
+		if idx < 0 {
+			return g, notFound("node not found")
+		}
+		var err error
+		updated, err = knowledge.Transition(g.Nodes[idx], target, req.Reason, s.clock.Now().UTC())
+		if err != nil {
+			return g, err
+		}
+		next := knowledge.Graph{Nodes: slices.Clone(g.Nodes), Edges: slices.Clone(g.Edges)}
+		next.Nodes[idx] = updated
+		return next, nil
+	})
+	if err != nil {
+		writeAPIError(w, s.log, apierr.From(err))
+		return
+	}
+	degraded := s.mirrorKnowledge(r.Context(), key, []knowledge.Node{updated}, nil)
+	writeJSON(w, s.log, http.StatusOK, NodeResponse{Node: updated, Degraded: degraded})
+}
+
+// targetState resolves the requested operation to the state to transition into.
+func (req PatchNodeRequest) targetState() (knowledge.State, *apierr.Error) {
 	var target knowledge.State
 	switch req.Op {
-	case "set_state":
-		if !isNodeState(req.State) {
-			writeError(w, http.StatusBadRequest, "state must be one of active|archived|deprecated")
-			return
+	case opSetState:
+		if !knowledge.ValidState(req.State) {
+			return "", badRequest("state must be one of active|archived|deprecated")
 		}
 		target = req.State
-	case "deprecate":
+	case opDeprecate:
 		target = knowledge.StateDeprecated
 	default:
-		writeError(w, http.StatusBadRequest, "op must be set_state or deprecate")
-		return
+		return "", badRequest("op must be " + opSetState + " or " + opDeprecate)
 	}
 	if target == knowledge.StateDeprecated && req.Reason == "" {
-		writeError(w, http.StatusBadRequest, "deprecation requires a reason")
-		return
+		return "", badRequest("deprecation requires a reason")
 	}
-
-	g, err := s.deps.Store.ReadKnowledge(r.Context(), key)
-	if err != nil {
-		s.deps.Logger.Error("knowledge read failed", "project", key.String(), "error", err)
-		writeError(w, http.StatusInternalServerError, "failed to read knowledge graph")
-		return
-	}
-	idx := -1
-	for i, n := range g.Nodes {
-		if n.ID == id {
-			idx = i
-			break
-		}
-	}
-	if idx < 0 {
-		writeError(w, http.StatusNotFound, "node not found")
-		return
-	}
-
-	now := s.deps.Clock.Now().UTC()
-	updated, err := transitionNode(g.Nodes[idx], target, req.Reason, now)
-	if errors.Is(err, knowledge.ErrInvalidTransition) {
-		writeError(w, http.StatusConflict, err.Error())
-		return
-	}
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-
-	next := knowledge.Graph{Nodes: slices.Clone(g.Nodes), Edges: slices.Clone(g.Edges)}
-	next.Nodes[idx] = updated
-	if err := s.deps.Store.WriteKnowledge(r.Context(), key, next); err != nil {
-		s.deps.Logger.Error("knowledge hot write failed", "project", key.String(), "error", err)
-		writeError(w, http.StatusInternalServerError, "failed to persist state transition")
-		return
-	}
-	degraded := s.mirrorKnowledge(r, key, []knowledge.Node{updated}, nil)
-	writeJSON(w, http.StatusOK, NodeResponse{Node: updated, Degraded: degraded})
+	return target, nil
 }
 
 // handlePurgeNode godoc
@@ -555,71 +525,63 @@ func (s *Server) handlePatchNode(w http.ResponseWriter, r *http.Request) {
 //	@Success	200		{object}	Envelope{data=PurgeNodeResponse}
 //	@Failure	400		{object}	Envelope	"confirm missing"
 //	@Failure	404		{object}	Envelope
+//	@Failure	409		{object}	Envelope	"node is still active — archive or deprecate it first (§3)"
 //	@Router		/v1/{ws}/{team}/{proj}/knowledge/nodes/{id} [delete]
 //
-// Contract: refuse without confirm=true; remove node + incident edges from hot
-// and best-effort DeleteNode in Neo4j.
+// Contract: refuse without confirm=true — that check runs before id validation,
+// so a destructive call is rejected for the destructive reason first. The
+// lifecycle gate is knowledge.Purge's: §3 requires the archived/deprecated
+// buffer before any deletion, so an active node is 409, not a silent wipe.
+// Then best-effort delete it in Neo4j.
 func (s *Server) handlePurgeNode(w http.ResponseWriter, r *http.Request) {
 	key := projectKey(r)
-	if err := validateProjectKey(key); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+	if apiErr := validateProjectKey(key); apiErr != nil {
+		writeAPIError(w, s.log, apiErr)
 		return
 	}
-	if r.URL.Query().Get("confirm") != "true" {
-		writeError(w, http.StatusBadRequest, "purge requires confirm=true (§3 — S3 versioning is the backstop)")
+	if r.URL.Query().Get(paramConfirm) != valueTrue {
+		writeAPIError(w, s.log, badRequest("purge requires confirm=true (§3 — S3 versioning is the backstop)"))
 		return
 	}
-	id := chi.URLParam(r, "id")
-	if !ulid.IsULID(id) {
-		writeError(w, http.StatusBadRequest, "id must be a ULID")
+	id := chi.URLParam(r, paramID)
+	if apiErr := validateULID(id); apiErr != nil {
+		writeAPIError(w, s.log, apiErr)
 		return
 	}
-	if s.deps.Store == nil {
-		writeError(w, http.StatusServiceUnavailable, "hot store unavailable")
+	if s.store == nil {
+		writeAPIError(w, s.log, unavailable(msgHotStoreUnavailable))
 		return
 	}
 
-	g, err := s.deps.Store.ReadKnowledge(r.Context(), key)
+	// Lookup, lifecycle gate and removal share one closure so a purge cannot
+	// rewrite the graph from a snapshot taken before a concurrent node creation,
+	// nor pass a gate against a state a concurrent PATCH has since changed.
+	// knowledge owns both rules: a missing id is its NotFound, an unbuffered
+	// node its Conflict, and apierr maps them to 404 and 409.
+	var removedEdges int
+	err := s.store.UpdateKnowledge(r.Context(), key, func(g knowledge.Graph) (knowledge.Graph, error) {
+		next, removed, err := knowledge.Purge(g, id)
+		if err != nil {
+			return g, err
+		}
+		removedEdges = removed
+		return next, nil
+	})
 	if err != nil {
-		s.deps.Logger.Error("knowledge read failed", "project", key.String(), "error", err)
-		writeError(w, http.StatusInternalServerError, "failed to read knowledge graph")
-		return
-	}
-	if !nodeExists(g, id) {
-		writeError(w, http.StatusNotFound, "node not found")
-		return
-	}
-
-	next := knowledge.Graph{Nodes: make([]knowledge.Node, 0, len(g.Nodes)-1), Edges: make([]knowledge.Edge, 0, len(g.Edges))}
-	for _, n := range g.Nodes {
-		if n.ID != id {
-			next.Nodes = append(next.Nodes, n)
-		}
-	}
-	removedEdges := 0
-	for _, e := range g.Edges {
-		if e.From == id || e.To == id {
-			removedEdges++
-			continue
-		}
-		next.Edges = append(next.Edges, e)
-	}
-	if err := s.deps.Store.WriteKnowledge(r.Context(), key, next); err != nil {
-		s.deps.Logger.Error("knowledge hot write failed", "project", key.String(), "error", err)
-		writeError(w, http.StatusInternalServerError, "failed to persist purge")
+		writeAPIError(w, s.log, apierr.From(err))
 		return
 	}
 
 	var degraded []string
-	if s.deps.Graph == nil {
+	if s.graph == nil {
 		degraded = []string{degradedGraph}
 		s.markDirty(r.Context(), key, hotstore.PlaneKnowledge)
-	} else if err := s.deps.Graph.DeleteNode(r.Context(), key, id); err != nil {
-		s.deps.Logger.Warn("graph node delete failed; degraded", "project", key.String(), "id", id, "error", err)
+	} else if err := s.graph.DeleteNode(r.Context(), key, id); err != nil {
+		s.log.Warn("graph node delete failed; degraded", "project", key.String(), "id", id, "error", err)
 		degraded = []string{degradedGraph}
 		s.markDirty(r.Context(), key, hotstore.PlaneKnowledge)
 	} else {
 		s.markIndexed(r.Context(), key, hotstore.PlaneKnowledge)
 	}
-	writeJSON(w, http.StatusOK, PurgeNodeResponse{PurgedID: id, RemovedEdges: removedEdges, Degraded: degraded})
+	writeJSON(w, s.log, http.StatusOK, PurgeNodeResponse{PurgedID: id, RemovedEdges: removedEdges, Degraded: degraded})
 }

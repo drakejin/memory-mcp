@@ -11,8 +11,8 @@ import (
 
 var now = time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
 
-func view(id string, ageDays int, consolidated bool) RecordView {
-	return RecordView{
+func view(id string, ageDays int, consolidated bool) recordView {
+	return recordView{
 		ID:           id,
 		OccurredAt:   now.AddDate(0, 0, -ageDays),
 		Consolidated: consolidated,
@@ -24,7 +24,7 @@ func TestAgeEligible(t *testing.T) {
 
 	tests := []struct {
 		name       string
-		recs       []RecordView
+		recs       []recordView
 		fileBytes  int64
 		maxBytes   int64
 		maxRecords int
@@ -37,7 +37,7 @@ func TestAgeEligible(t *testing.T) {
 		},
 		{
 			name: "old consolidated ages, old unconsolidated never does",
-			recs: []RecordView{
+			recs: []recordView{
 				view("01A", 40, true),
 				view("01B", 40, false),
 				view("01C", 5, true),
@@ -46,17 +46,17 @@ func TestAgeEligible(t *testing.T) {
 		},
 		{
 			name: "exactly ttl days old is eligible",
-			recs: []RecordView{view("01A", ttl, true)},
+			recs: []recordView{view("01A", ttl, true)},
 			want: []string{"01A"},
 		},
 		{
 			name: "one day short of ttl stays hot",
-			recs: []RecordView{view("01A", ttl-1, true)},
+			recs: []recordView{view("01A", ttl-1, true)},
 			want: []string{},
 		},
 		{
 			name: "record-count pressure ages oldest consolidated beyond limit",
-			recs: []RecordView{
+			recs: []recordView{
 				view("01A", 10, true), // oldest consolidated
 				view("01B", 8, true),
 				view("01C", 6, false),
@@ -68,7 +68,7 @@ func TestAgeEligible(t *testing.T) {
 		},
 		{
 			name: "byte pressure ages proportionally",
-			recs: []RecordView{
+			recs: []recordView{
 				view("01A", 10, true),
 				view("01B", 8, true),
 				view("01C", 6, true),
@@ -80,7 +80,7 @@ func TestAgeEligible(t *testing.T) {
 		},
 		{
 			name: "pressure never touches unconsolidated records",
-			recs: []RecordView{
+			recs: []recordView{
 				view("01A", 10, false),
 				view("01B", 8, false),
 				view("01C", 6, true),
@@ -90,7 +90,7 @@ func TestAgeEligible(t *testing.T) {
 		},
 		{
 			name: "ttl-aged records count toward the pressure quota",
-			recs: []RecordView{
+			recs: []recordView{
 				view("01A", 40, true), // ttl-eligible AND oldest
 				view("01B", 5, true),
 				view("01C", 4, true),
@@ -100,7 +100,7 @@ func TestAgeEligible(t *testing.T) {
 		},
 		{
 			name: "results sorted oldest first",
-			recs: []RecordView{
+			recs: []recordView{
 				view("01B", 35, true),
 				view("01A", 45, true),
 			},
@@ -108,7 +108,7 @@ func TestAgeEligible(t *testing.T) {
 		},
 		{
 			name: "disabled thresholds never trigger pressure",
-			recs: []RecordView{
+			recs: []recordView{
 				view("01A", 5, true),
 				view("01B", 4, true),
 			},
@@ -121,9 +121,9 @@ func TestAgeEligible(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := AgeEligible(tt.recs, now, ttl, tt.fileBytes, tt.maxBytes, tt.maxRecords)
+			got := ageEligible(tt.recs, now, ttl, tt.fileBytes, tt.maxBytes, tt.maxRecords)
 			if !slices.Equal(got, tt.want) {
-				t.Errorf("AgeEligible = %v, want %v", got, tt.want)
+				t.Errorf("ageEligible = %v, want %v", got, tt.want)
 			}
 		})
 	}

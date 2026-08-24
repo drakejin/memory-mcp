@@ -1,6 +1,7 @@
 package consolidate
 
 import (
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -62,10 +63,11 @@ func proposeCandidates(key hotstore.ProjectKey, recs []episodic.Record) []Candid
 	for _, c := range clusters {
 		out = append(out, Candidate{
 			Project:    key.String(),
-			Entities:   sortedKeys(c.entities),
+			Entities:   slices.Sorted(maps.Keys(c.entities)),
 			EpisodeIDs: c.ids,
-			From:       c.from,
-			To:         c.to,
+			// The report is a boundary: timestamps leave as RFC3339 UTC (§3).
+			From: c.from.UTC(),
+			To:   c.to.UTC(),
 		})
 	}
 	return out
@@ -94,7 +96,7 @@ func findCluster(clusters []*cluster, ents map[string]bool, at time.Time) *clust
 // normalizeEntities applies the dictionary normalization of §4 step 2:
 // trim + lowercase, dropping empties and duplicates.
 func normalizeEntities(raw []string) map[string]bool {
-	out := map[string]bool{}
+	out := make(map[string]bool, len(raw))
 	for _, e := range raw {
 		n := strings.ToLower(strings.TrimSpace(e))
 		if n != "" {
@@ -117,7 +119,7 @@ func newEntityAccumulator() *entityAccumulator {
 // pairwise co-occurrence weights (§4 step 2).
 func (a *entityAccumulator) add(recs []episodic.Record) {
 	for _, rec := range recs {
-		ents := sortedKeys(normalizeEntities(rec.Entities))
+		ents := slices.Sorted(maps.Keys(normalizeEntities(rec.Entities)))
 		for _, e := range ents {
 			stat, ok := a.stats[e]
 			if !ok {
@@ -137,18 +139,8 @@ func (a *entityAccumulator) add(recs []episodic.Record) {
 // sorted returns the accumulated stats ordered by entity name.
 func (a *entityAccumulator) sorted() []EntityStat {
 	out := make([]EntityStat, 0, len(a.stats))
-	for _, name := range sortedKeys(a.stats) {
+	for _, name := range slices.Sorted(maps.Keys(a.stats)) {
 		out = append(out, *a.stats[name])
 	}
 	return out
-}
-
-// sortedKeys returns the map's keys in ascending order.
-func sortedKeys[V any](m map[string]V) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	slices.Sort(keys)
-	return keys
 }

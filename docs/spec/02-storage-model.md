@@ -105,7 +105,7 @@ type Graph struct {
 }
 ```
 
-프로젝트당 파일 하나에 그래프 전체가 들어간다. 노드 추가·supersede·purge 전부 `ReadKnowledge` → 변환 → `WriteKnowledge`의 전량 교체다. 상태기계와 supersede 규칙은 [05-knowledge-graph](05-knowledge-graph.md) 소관.
+프로젝트당 파일 하나에 그래프 전체가 들어간다. 노드 추가·supersede·purge 전부 `UpdateKnowledge(ctx, key, fn)` 안에서 변환 후 전량 교체다 — 읽기·변환·쓰기가 한 락 안에서 끝나므로 동시 쓰기가 서로를 덮어쓰지 못한다. 상태기계와 supersede 규칙은 [05-knowledge-graph](05-knowledge-graph.md) 소관.
 
 `Provenance`가 episode id를 가리키는데 그 episode가 cold로 내려가도 링크가 깨지지 않는 이유는 id가 불변이기 때문이다 — `GET .../episodes/{id}`가 hot 미스 시 S3 아카이브를 스캔한다(§8).
 
@@ -140,7 +140,7 @@ MkdirAll(dir, 0700)
 | `AppendEpisode` | 같은 id가 이미 있으면 거부 — episodic은 append-only이고 id는 provenance 앵커다 |
 | `UpdateEpisodes(ids, fn)` | `fn`이 id를 바꾸면 에러. 요청한 id 중 하나라도 없으면 `ErrNotFound`(정렬된 목록 포함) |
 | `RemoveEpisodes(ids)` | 없는 id는 그냥 건너뛴다 — 에이징 재시도가 멱등해야 하므로 |
-| `WriteKnowledge` | 그래프 전량 교체. manifest `record_count`는 **노드 수**(엣지 제외) |
+| `UpdateKnowledge(fn)` | `fn`이 현재 그래프로부터 다음 그래프를 만들고, 읽기·`fn`·쓰기가 한 번의 락 안에서 일어난다(전량 교체). `fn` 에러는 쓰기를 취소하고 원인을 그대로 전달한다. manifest `record_count`는 **노드 수**(엣지 제외) |
 | `MarkDirty` | 엔트리가 없으면 만들어서 표시 — dirty 마크는 절대 유실되면 안 된다 |
 | `FileInfo` | `os.Stat` → (size, mtime). 없으면 `ErrNotFound`. stat-gate와 압박 임계치가 쓴다 |
 

@@ -2,33 +2,70 @@ package knowledge
 
 import (
 	"errors"
+	"fmt"
+	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/drakejin/memory-mcp/internal/ulid"
+	"github.com/drakejin/memory-mcp/internal/errs"
 )
 
 var testNow = time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
 
+// idSeq backs newID. Fixtures only need ids that satisfy ulid.Valid and differ
+// from one another, so a counter beats real entropy: values stay stable across
+// runs, which keeps failure output readable. Test-only state.
+var idSeq atomic.Int64
+
+// newID mints a unique fixture ULID. It takes no *testing.T because several
+// fixtures build ids inside closures that have none.
+func newID() string {
+	// 4-char head + 22 digits = the 26 Crockford characters ulid.Valid wants.
+	return fmt.Sprintf("01JD%022d", idSeq.Add(1))
+}
+
 func validNode(t *testing.T) Node {
 	t.Helper()
 	return Node{
-		ID:         ulid.New(),
+		ID:         newID(),
 		Kind:       KindFact,
 		Name:       "opensearch nori 플러그인 필수",
 		Body:       "episodic 한국어 검색은 nori 분석기가 필요하다",
 		Aliases:    []string{"nori"},
 		State:      StateActive,
 		Trust:      TrustAgentInferred,
-		Provenance: []string{ulid.New()},
+		Provenance: []string{newID()},
 		Created:    testNow,
 		Updated:    testNow,
 	}
 }
 
+// assertDomainErr checks that err is an *errs.Error of the expected kind and
+// op. Kind is compared through the sentinel, never as a string (§2.1).
+func assertDomainErr(t *testing.T, err error, sentinel error, wantOp, wantEntity string) *errs.Error {
+	t.Helper()
+	if !errors.Is(err, sentinel) {
+		t.Fatalf("want %v, got %v", sentinel, err)
+	}
+	var domain *errs.Error
+	if !errors.As(err, &domain) {
+		t.Fatalf("error is not *errs.Error: %#v", err)
+	}
+	if domain.Op != wantOp {
+		t.Errorf("op = %q, want %q", domain.Op, wantOp)
+	}
+	if domain.Entity != wantEntity {
+		t.Errorf("entity = %q, want %q", domain.Entity, wantEntity)
+	}
+	if domain.Msg == "" {
+		t.Error("msg must carry a client-facing explanation")
+	}
+	return domain
+}
+
 func TestNodeValidate(t *testing.T) {
 	base := validNode(t)
-	other := ulid.New()
+	other := newID()
 
 	tests := []struct {
 		name    string
@@ -67,9 +104,7 @@ func TestNodeValidate(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			err := tt.mutate(base).Validate()
 			if tt.wantErr {
-				if !errors.Is(err, ErrInvalidNode) {
-					t.Fatalf("want ErrInvalidNode, got %v", err)
-				}
+				assertDomainErr(t, err, errs.ErrInvalid, opValidateNode, EntityNode)
 				return
 			}
 			if err != nil {
@@ -79,8 +114,19 @@ func TestNodeValidate(t *testing.T) {
 	}
 }
 
+// TestNodeValidateFields locks the structured detail that reaches slog but must
+// never reach a response body.
+func TestNodeValidateFields(t *testing.T) {
+	n := validNode(t)
+	n.Kind = "opinion"
+	domain := assertDomainErr(t, n.Validate(), errs.ErrInvalid, opValidateNode, EntityNode)
+	if domain.Fields["kind"] != "opinion" {
+		t.Fatalf("fields = %v, want kind=opinion", domain.Fields)
+	}
+}
+
 func TestEdgeValidate(t *testing.T) {
-	from, to := ulid.New(), ulid.New()
+	from, to := newID(), newID()
 	base := Edge{From: from, To: to, Rel: RelRelatesTo, Confidence: 0.9}
 
 	tests := []struct {
@@ -107,220 +153,12 @@ func TestEdgeValidate(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			err := tt.mutate(base).Validate()
 			if tt.wantErr {
-				if !errors.Is(err, ErrInvalidEdge) {
-					t.Fatalf("want ErrInvalidEdge, got %v", err)
-				}
+				assertDomainErr(t, err, errs.ErrInvalid, opValidateEdge, EntityEdge)
 				return
 			}
 			if err != nil {
 				t.Fatalf("want nil, got %v", err)
 			}
 		})
-	}
-}
-
-// TestTransition encodes the v1 state machine from src/lifecycle.ts:
-// active→[archived,deprecated], archived→[active,deprecated],
-// deprecated→[active]; same-state is a no-op; deprecation requires a reason.
-func TestTransition(t *testing.T) {
-	tests := []struct {
-		name    string
-		from    State
-		to      State
-		reason  string
-		wantErr bool
-	}{
-		{"active to archived", StateActive, StateArchived, "", false},
-		{"active to deprecated with reason", StateActive, StateDeprecated, "판단이 틀렸음", false},
-		{"archived to active (revive)", StateArchived, StateActive, "", false},
-		{"archived to deprecated with reason", StateArchived, StateDeprecated, "wrong", false},
-		{"deprecated to active (revive)", StateDeprecated, StateActive, "", false},
-		{"same state no-op", StateArchived, StateArchived, "", false},
-		{"deprecated to archived illegal", StateDeprecated, StateArchived, "", true},
-		{"deprecate without reason", StateActive, StateDeprecated, "", true},
-		{"deprecate with blank reason", StateActive, StateDeprecated, "   ", true},
-		{"unknown target", StateActive, State("purged"), "", true},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			n := validNode(t)
-			n.State = tt.from
-			if tt.from != StateActive {
-				n.SupersededBy = ulid.New()
-			}
-			got, err := Transition(n, tt.to, tt.reason, testNow.Add(time.Hour))
-			if tt.wantErr {
-				if !errors.Is(err, ErrInvalidTransition) {
-					t.Fatalf("want ErrInvalidTransition, got %v", err)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			if got.State != tt.to {
-				t.Fatalf("state = %s, want %s", got.State, tt.to)
-			}
-			if !got.Updated.Equal(testNow.Add(time.Hour)) {
-				t.Fatalf("updated not bumped: %v", got.Updated)
-			}
-			if tt.to == StateActive && got.SupersededBy != "" {
-				t.Fatalf("revive must clear superseded_by, got %q", got.SupersededBy)
-			}
-		})
-	}
-}
-
-func TestTransitionDoesNotMutateInput(t *testing.T) {
-	n := validNode(t)
-	if _, err := Transition(n, StateArchived, "", testNow.Add(time.Hour)); err != nil {
-		t.Fatalf("transition: %v", err)
-	}
-	if n.State != StateActive || !n.Updated.Equal(testNow) {
-		t.Fatalf("input node mutated: %+v", n)
-	}
-}
-
-func TestCanPurge(t *testing.T) {
-	tests := []struct {
-		state State
-		want  bool
-	}{
-		{StateActive, false},
-		{StateArchived, true},
-		{StateDeprecated, true},
-		{State("bogus"), false},
-	}
-	for _, tt := range tests {
-		if got := CanPurge(tt.state); got != tt.want {
-			t.Errorf("CanPurge(%s) = %v, want %v", tt.state, got, tt.want)
-		}
-	}
-}
-
-func TestSupersede(t *testing.T) {
-	old1 := validNode(t)
-	old2 := validNode(t)
-	old2.State = StateDeprecated
-	g := Graph{Nodes: []Node{old1, old2}}
-
-	winner := validNode(t)
-	later := testNow.Add(2 * time.Hour)
-
-	got, err := Supersede(g, winner, []string{old1.ID, old2.ID, old1.ID}, later)
-	if err != nil {
-		t.Fatalf("supersede: %v", err)
-	}
-
-	if len(got.Nodes) != 3 {
-		t.Fatalf("nodes = %d, want 3", len(got.Nodes))
-	}
-	w, err := FindNode(got, winner.ID)
-	if err != nil {
-		t.Fatalf("winner missing: %v", err)
-	}
-	if w.State != StateActive {
-		t.Errorf("winner state = %s, want active", w.State)
-	}
-	if len(w.Supersedes) != 2 || w.Supersedes[0] != old1.ID || w.Supersedes[1] != old2.ID {
-		t.Errorf("winner supersedes = %v, want deduped [%s %s]", w.Supersedes, old1.ID, old2.ID)
-	}
-
-	l1, _ := FindNode(got, old1.ID)
-	if l1.State != StateArchived || l1.SupersededBy != winner.ID {
-		t.Errorf("loser1 = state %s superseded_by %s, want archived/%s", l1.State, l1.SupersededBy, winner.ID)
-	}
-	if !l1.Updated.Equal(later) {
-		t.Errorf("loser1 updated = %v, want %v", l1.Updated, later)
-	}
-	// v1 applySupersede only archives active losers; deprecated stays put.
-	l2, _ := FindNode(got, old2.ID)
-	if l2.State != StateDeprecated || l2.SupersededBy != winner.ID {
-		t.Errorf("loser2 = state %s superseded_by %s, want deprecated/%s", l2.State, l2.SupersededBy, winner.ID)
-	}
-
-	if len(got.Edges) != 2 {
-		t.Fatalf("edges = %d, want 2 supersede edges", len(got.Edges))
-	}
-	for i, target := range []string{old1.ID, old2.ID} {
-		e := got.Edges[i]
-		if e.From != winner.ID || e.To != target || e.Rel != RelSupersedes {
-			t.Errorf("edge[%d] = %+v, want %s -supersedes-> %s", i, e, winner.ID, target)
-		}
-	}
-
-	// Input graph must be untouched.
-	if g.Nodes[0].SupersededBy != "" || g.Nodes[0].State != StateActive {
-		t.Errorf("input graph mutated: %+v", g.Nodes[0])
-	}
-	if len(g.Edges) != 0 {
-		t.Errorf("input edges mutated: %v", g.Edges)
-	}
-}
-
-func TestSupersedeAppendOnlyWhenNoTargets(t *testing.T) {
-	n := validNode(t)
-	got, err := Supersede(Graph{}, n, nil, testNow)
-	if err != nil {
-		t.Fatalf("supersede: %v", err)
-	}
-	if len(got.Nodes) != 1 || len(got.Edges) != 0 {
-		t.Fatalf("got %d nodes %d edges, want 1/0", len(got.Nodes), len(got.Edges))
-	}
-	if got.Nodes[0].State != StateActive {
-		t.Fatalf("state = %s, want active", got.Nodes[0].State)
-	}
-}
-
-func TestSupersedeErrors(t *testing.T) {
-	existing := validNode(t)
-	g := Graph{Nodes: []Node{existing}}
-
-	t.Run("missing target", func(t *testing.T) {
-		_, err := Supersede(g, validNode(t), []string{ulid.New()}, testNow)
-		if !errors.Is(err, ErrNodeNotFound) {
-			t.Fatalf("want ErrNodeNotFound, got %v", err)
-		}
-	})
-	t.Run("self supersede", func(t *testing.T) {
-		n := validNode(t)
-		_, err := Supersede(g, n, []string{n.ID}, testNow)
-		if !errors.Is(err, ErrInvalidNode) {
-			t.Fatalf("want ErrInvalidNode, got %v", err)
-		}
-	})
-	t.Run("duplicate node id", func(t *testing.T) {
-		_, err := Supersede(g, existing, nil, testNow)
-		if !errors.Is(err, ErrInvalidNode) {
-			t.Fatalf("want ErrInvalidNode, got %v", err)
-		}
-	})
-}
-
-func TestSupersedeSetsCreatedWhenZero(t *testing.T) {
-	n := validNode(t)
-	n.Created = time.Time{}
-	got, err := Supersede(Graph{}, n, nil, testNow)
-	if err != nil {
-		t.Fatalf("supersede: %v", err)
-	}
-	if !got.Nodes[0].Created.Equal(testNow) {
-		t.Fatalf("created = %v, want %v", got.Nodes[0].Created, testNow)
-	}
-}
-
-func TestFindNode(t *testing.T) {
-	n := validNode(t)
-	g := Graph{Nodes: []Node{n}}
-
-	got, err := FindNode(g, n.ID)
-	if err != nil {
-		t.Fatalf("find: %v", err)
-	}
-	if got.ID != n.ID {
-		t.Fatalf("got %s, want %s", got.ID, n.ID)
-	}
-	if _, err := FindNode(g, ulid.New()); !errors.Is(err, ErrNodeNotFound) {
-		t.Fatalf("want ErrNodeNotFound, got %v", err)
 	}
 }

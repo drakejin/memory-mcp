@@ -4,18 +4,28 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"sort"
+	"slices"
 	"time"
 
-	"github.com/drakejin/memory-mcp/internal/cold"
 	"github.com/drakejin/memory-mcp/internal/consolidate"
-	"github.com/drakejin/memory-mcp/internal/hotstore"
+	"github.com/drakejin/memory-mcp/internal/errs"
 	"github.com/drakejin/memory-mcp/internal/rehydrate"
+	"github.com/drakejin/memory-mcp/internal/server/apierr"
 )
 
 // emptySHA256 is sha256("") — a cheap, always-valid probe key for cold-store
-// reachability (BlobExists on it answers false without erroring when S3 is up).
+// reachability.
 const emptySHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+
+// hoursPerDay converts the configured TTL in days into a duration.
+const hoursPerDay = 24 * time.Hour
+
+// Degraded notes /v1/status raises for itself when a count could not be taken.
+// They are strings rather than errors: /status stays 200 and discloses the gap.
+const (
+	degradedCountUnavailable = "unconsolidated count unavailable"
+	degradedCountIncomplete  = "unconsolidated count incomplete: "
+)
 
 // StatusReport is the honesty contract (§0 principle 3, §5): index freshness,
 // rehydration need, unconsolidated counts, and S3 sync state — always
@@ -63,26 +73,13 @@ type ConsolidateRequest struct {
 //	@Success	200	{object}	Envelope{data=StatusReport}
 //	@Router		/v1/status [get]
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
-	if s.deps.Store == nil {
-		writeError(w, http.StatusServiceUnavailable, "hot store unavailable")
+	if s.store == nil {
+		writeAPIError(w, s.log, unavailable(msgHotStoreUnavailable))
 		return
 	}
 	rep := StatusReport{DirtyFiles: []string{}, Degraded: []string{}}
 
-	if s.deps.Rehydrator == nil {
-		rep.Drift = rehydrate.DriftReport{
-			Episodic:  rehydrate.Drift{Unavailable: true, Reason: "rehydrator not configured"},
-			Knowledge: rehydrate.Drift{Unavailable: true, Reason: "rehydrator not configured"},
-		}
-	} else if drift, err := s.deps.Rehydrator.CheckDrift(r.Context()); err != nil {
-		s.deps.Logger.Error("status drift check failed", "error", err)
-		rep.Drift = rehydrate.DriftReport{
-			Episodic:  rehydrate.Drift{Unavailable: true, Reason: "drift check failed"},
-			Knowledge: rehydrate.Drift{Unavailable: true, Reason: "drift check failed"},
-		}
-	} else {
-		rep.Drift = drift
-	}
+	rep.Drift = s.driftReport(r.Context())
 	if rep.Drift.Episodic.Unavailable {
 		rep.Degraded = append(rep.Degraded, degradedSearch)
 	}
@@ -90,10 +87,9 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		rep.Degraded = append(rep.Degraded, degradedGraph)
 	}
 
-	m, err := s.deps.Store.Manifest(r.Context())
+	m, err := s.store.Manifest(r.Context())
 	if err != nil {
-		s.deps.Logger.Error("status manifest read failed", "error", err)
-		writeError(w, http.StatusInternalServerError, "manifest unreadable")
+		writeAPIError(w, s.log, apierr.From(err))
 		return
 	}
 	rep.ManifestUpdatedAt = m.UpdatedAt
@@ -102,12 +98,12 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 			rep.DirtyFiles = append(rep.DirtyFiles, fk)
 		}
 	}
-	sort.Strings(rep.DirtyFiles)
+	slices.Sort(rep.DirtyFiles)
 
-	s.countUnconsolidated(r, &rep)
+	s.countUnconsolidated(r.Context(), &rep)
 
-	rep.S3 = S3SyncStatus{Bucket: s.cfg.S3Bucket}
-	if s.deps.Archiver != nil {
+	rep.S3 = S3SyncStatus{Bucket: s.s3Bucket}
+	if s.archiver != nil {
 		rep.S3.Reachable = s.coldReachable(r.Context())
 	}
 	if !rep.S3.Reachable {
@@ -118,48 +114,72 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	rep.S3.LastSnapshotAt = s.lastSnapshotAt
 	s.statusMu.Unlock()
 
-	writeJSON(w, http.StatusOK, rep)
+	writeJSON(w, s.log, http.StatusOK, rep)
+}
+
+// driftReport answers the manifest-vs-derived question even when it cannot be
+// asked: an absent or failing rehydrator is reported as unavailable with a
+// reason, never as "no drift" (§0 principle 3).
+func (s *Server) driftReport(ctx context.Context) rehydrate.DriftReport {
+	const (
+		reasonNoRehydrator = "rehydrator not configured"
+		reasonCheckFailed  = "drift check failed"
+	)
+	unavailableWith := func(reason string) rehydrate.DriftReport {
+		return rehydrate.DriftReport{
+			Episodic:  rehydrate.Drift{Unavailable: true, Reason: reason},
+			Knowledge: rehydrate.Drift{Unavailable: true, Reason: reason},
+		}
+	}
+	if s.rehydrator == nil {
+		return unavailableWith(reasonNoRehydrator)
+	}
+	drift, err := s.rehydrator.CheckDrift(ctx)
+	if err != nil {
+		s.log.Error("status drift check failed", "error", err)
+		return unavailableWith(reasonCheckFailed)
+	}
+	return drift
 }
 
 // coldReachable probes the cold store for /status honesty (§0 principle 3).
 //
-// It deliberately uses a GET (FetchBlob) rather than a HEAD (BlobExists): S3
-// answers HeadObject against a *non-existent bucket* with a bare 404 that is
+// It deliberately uses a GET (FetchBlob) rather than a HEAD: S3 answers
+// HeadObject against a *non-existent bucket* with a bare 404 that is
 // byte-for-byte indistinguishable from a missing key, so a HEAD-based probe
 // reports a bucket that does not exist as "reachable". GetObject returns
-// NoSuchBucket, so only a hit or an explicit ErrNotFound proves the bucket is
+// NoSuchBucket, so only a hit or an explicit not-found proves the bucket is
 // really there.
 func (s *Server) coldReachable(ctx context.Context) bool {
-	body, err := s.deps.Archiver.FetchBlob(ctx, emptySHA256)
+	body, err := s.archiver.FetchBlob(ctx, emptySHA256)
 	if err == nil {
 		body.Close()
 		return true
 	}
-	if errors.Is(err, cold.ErrNotFound) {
+	if errors.Is(err, errs.ErrNotFound) {
 		// Bucket answered; the probe key simply is not stored.
 		return true
 	}
-	s.deps.Logger.Warn("cold store unreachable", "bucket", s.cfg.S3Bucket, "error", err)
+	s.log.Warn("cold store unreachable", "bucket", s.s3Bucket, "error", err)
 	return false
 }
 
 // countUnconsolidated scans every hot project for undistilled episodes and the
 // stale subset older than the TTL (§3.1 — these are surfaced forever, never
-// auto-deleted). Failures degrade to logs; /status must still answer.
-func (s *Server) countUnconsolidated(r *http.Request, rep *StatusReport) {
-	projects, err := s.deps.Store.ListProjects(r.Context())
+// auto-deleted). Failures degrade to a disclosure; /status must still answer.
+func (s *Server) countUnconsolidated(ctx context.Context, rep *StatusReport) {
+	projects, err := s.store.ListProjects(ctx)
 	if err != nil {
-		s.deps.Logger.Error("status project listing failed", "error", err)
-		rep.Degraded = append(rep.Degraded, "unconsolidated count unavailable")
+		s.log.Error("status project listing failed", "error", err)
+		rep.Degraded = append(rep.Degraded, degradedCountUnavailable)
 		return
 	}
-	ttl := time.Duration(s.cfg.EpisodicTTLDays) * 24 * time.Hour
-	staleBefore := s.deps.Clock.Now().UTC().Add(-ttl)
+	staleBefore := s.clock.Now().UTC().Add(-time.Duration(s.ttlDays) * hoursPerDay)
 	for _, p := range projects {
-		recs, err := s.deps.Store.ListEpisodes(r.Context(), p)
+		recs, err := s.store.ListEpisodes(ctx, p)
 		if err != nil {
-			s.deps.Logger.Error("status episode listing failed", "project", p.String(), "error", err)
-			rep.Degraded = append(rep.Degraded, "unconsolidated count incomplete: "+p.String())
+			s.log.Error("status episode listing failed", "project", p.String(), "error", err)
+			rep.Degraded = append(rep.Degraded, degradedCountIncomplete+p.String())
 			continue
 		}
 		for _, rec := range recs {
@@ -186,55 +206,46 @@ func (s *Server) countUnconsolidated(r *http.Request, rep *StatusReport) {
 //	@Failure	503		{object}	Envelope
 //	@Router		/v1/consolidate [post]
 func (s *Server) handleConsolidate(w http.ResponseWriter, r *http.Request) {
-	if s.deps.Consolidator == nil {
-		writeError(w, http.StatusServiceUnavailable, "consolidation unavailable")
+	if s.consolidator == nil {
+		writeAPIError(w, s.log, unavailable(msgConsolidatorUnavailable))
 		return
 	}
 	var req ConsolidateRequest
-	if err := decodeJSON(w, r, &req, true); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+	if apiErr := decodeJSON(w, r, &req, true); apiErr != nil {
+		writeAPIError(w, s.log, apiErr)
 		return
 	}
 	opts := consolidate.Options{DryRun: req.DryRun}
 	for _, raw := range req.Projects {
-		key, err := parseProjectString(raw)
-		if err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
+		key, apiErr := parseProjectString(raw)
+		if apiErr != nil {
+			writeAPIError(w, s.log, apiErr)
 			return
 		}
 		opts.Projects = append(opts.Projects, key)
 	}
 
-	rep, err := s.deps.Consolidator.Run(r.Context(), opts)
+	rep, err := s.consolidator.Run(r.Context(), opts)
 	if err != nil {
-		s.deps.Logger.Error("consolidation run failed", "error", err)
-		writeError(w, http.StatusInternalServerError, "consolidation failed")
+		writeAPIError(w, s.log, apierr.From(err))
 		return
 	}
-	now := s.deps.Clock.Now().UTC()
+	s.recordColdActivity(rep)
+	writeJSON(w, s.log, http.StatusOK, rep)
+}
+
+// recordColdActivity refreshes the S3 activity timestamps /v1/status reports.
+// Guarded by statusMu, which is the only lock in this package.
+func (s *Server) recordColdActivity(rep consolidate.Report) {
+	now := s.clock.Now().UTC()
 	s.statusMu.Lock()
+	defer s.statusMu.Unlock()
 	if len(rep.ArchiveKeys) > 0 {
 		s.lastArchiveAt = now
 	}
 	if len(rep.SnapshotKeys) > 0 {
 		s.lastSnapshotAt = now
 	}
-	s.statusMu.Unlock()
-	writeJSON(w, http.StatusOK, rep)
-}
-
-// parseProjectString parses a "ws/team/proj" selector.
-func parseProjectString(raw string) (hotstore.ProjectKey, error) {
-	var key hotstore.ProjectKey
-	parts := splitProject(raw)
-	if parts == nil {
-		return key, errInvalidProject(raw)
-	}
-	key = hotstore.ProjectKey{Workspace: parts[0], Team: parts[1], Project: parts[2]}
-	if err := validateProjectKey(key); err != nil {
-		return key, errInvalidProject(raw)
-	}
-	return key, nil
 }
 
 // handleReindex godoc
@@ -247,16 +258,15 @@ func parseProjectString(raw string) (hotstore.ProjectKey, error) {
 //	@Failure	503		{object}	Envelope
 //	@Router		/v1/reindex [post]
 func (s *Server) handleReindex(w http.ResponseWriter, r *http.Request) {
-	if s.deps.Rehydrator == nil {
-		writeError(w, http.StatusServiceUnavailable, "rehydrator unavailable")
+	if s.rehydrator == nil {
+		writeAPIError(w, s.log, unavailable(msgRehydratorUnavailable))
 		return
 	}
-	verify := r.URL.Query().Get("verify") == "true"
-	rep, err := s.deps.Rehydrator.RehydrateAll(r.Context(), verify)
+	verify := r.URL.Query().Get(paramVerify) == valueTrue
+	rep, err := s.rehydrator.RehydrateAll(r.Context(), verify)
 	if err != nil {
-		s.deps.Logger.Error("reindex failed", "error", err)
-		writeError(w, http.StatusInternalServerError, "reindex failed")
+		writeAPIError(w, s.log, apierr.From(err))
 		return
 	}
-	writeJSON(w, http.StatusOK, rep)
+	writeJSON(w, s.log, http.StatusOK, rep)
 }

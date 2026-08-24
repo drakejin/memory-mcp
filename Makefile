@@ -2,7 +2,7 @@ GO ?= go
 COMPOSE ?= docker compose -f deploy/docker-compose.yml
 LISTEN ?= 127.0.0.1:8420
 
-.PHONY: help start stop restart status logs run build vet test swagger blackbox infra-up infra-down infra-wait
+.PHONY: help start stop restart status logs run build vet vet-blackbox test live swagger blackbox infra-up infra-down infra-wait
 
 help: ## List targets
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
@@ -31,8 +31,13 @@ logs: ## Tail derived-store logs
 infra-up: ## Start OpenSearch + Neo4j containers (non-persistent by design)
 	$(COMPOSE) up -d --build
 
-infra-down: ## Stop and remove the containers
-	$(COMPOSE) down
+infra-down: ## Stop and remove the containers, and the anonymous volumes they leak
+	# -v is required, not tidiness. The compose file declares no volumes (§8:
+	# the derived stores are intentionally non-persistent), but the neo4j image
+	# declares VOLUME /data /logs, so every `up` creates two fresh anonymous
+	# volumes that a plain `down` leaves behind. Repeated blackbox runs then
+	# fill the Docker disk until container creation fails with ENOSPC.
+	$(COMPOSE) down -v --remove-orphans
 
 infra-wait: ## Block until both containers report healthy
 	@echo "==> waiting for opensearch + neo4j to become healthy"
@@ -56,8 +61,14 @@ build: ## Compile everything
 vet: ## go vet
 	$(GO) vet ./...
 
-test: ## Unit tests (fakes only; no containers or AWS needed)
-	$(GO) test ./...
+vet-blackbox: ## Type-check the build-tagged §10 suite (it is invisible to plain `go test ./...`)
+	$(GO) vet -tags blackbox ./test/blackbox/...
+
+test: vet-blackbox ## Unit tests (fakes only; no containers or AWS needed)
+	$(GO) test -race ./...
+
+live: infra-up infra-wait ## Integration tests against the real containers + real S3 bucket
+	DJ_MEMORY_LIVE_TEST=1 $(GO) test -count=1 -v ./internal/search/... ./internal/graph/... ./internal/cold/...
 
 swagger: ## Regenerate docs/ (swagger.json + docs.go) from swag annotations
 	$(GO) run github.com/swaggo/swag/cmd/swag init -g cmd/memory-mcp/main.go -o docs --parseInternal

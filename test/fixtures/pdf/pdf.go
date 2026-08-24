@@ -1,9 +1,13 @@
-// Package blackbox holds the §10 acceptance scenarios (architecture-v2.md).
+// Package pdf generates deterministic PDF fixtures for tests.
 //
-// This file is untagged on purpose: makeMinimalPDF is a pure fixture generator
-// verified by a normal unit test (pdf_test.go), while the scenario drivers are
-// behind the `blackbox` build tag.
-package blackbox
+// It lives outside test/blackbox on purpose. Every §10 scenario driver carries
+// //go:build blackbox, so a fixture generator sitting in that package would be
+// its only untagged file — and the default `go test ./...` run would report
+// "test/blackbox coverage: 100.0%" while none of the acceptance scenarios had
+// executed. That is exactly the dishonest reporting §0 principle 3 forbids, so
+// the fixture lives here and test/blackbox reports [no test files] until the
+// tagged suite is actually run (make blackbox).
+package pdf
 
 import (
 	"bytes"
@@ -11,15 +15,15 @@ import (
 	"strings"
 )
 
-// makeMinimalPDF builds a deterministic single-page PDF with a real text
-// layer (ASCII, Helvetica, uncompressed content stream) so the document
-// pipeline's ledongthuc/pdf extractor finds honest extractable text.
-// Korean morphology is covered by the episode fixtures, not the PDF (§10.4).
-func makeMinimalPDF(lines []string) []byte {
+// Minimal builds a deterministic single-page PDF with a real text layer
+// (ASCII, Helvetica, uncompressed content stream) so the document pipeline's
+// ledongthuc/pdf extractor finds honest extractable text. Korean morphology is
+// covered by the episode fixtures, not the PDF (§10.4).
+func Minimal(lines []string) []byte {
 	var content strings.Builder
 	content.WriteString("BT\n/F1 12 Tf\n16 TL\n72 720 Td\n")
 	for _, line := range lines {
-		content.WriteString("(" + escapePDFText(line) + ") Tj\nT*\n")
+		content.WriteString("(" + escapeText(line) + ") Tj\nT*\n")
 	}
 	content.WriteString("ET")
 
@@ -52,9 +56,9 @@ func makeMinimalPDF(lines []string) []byte {
 	return buf.Bytes()
 }
 
-// escapePDFText escapes the three characters that are special inside a PDF
+// escapeText escapes the three characters that are special inside a PDF
 // literal string. Fixture text is ASCII by design.
-func escapePDFText(s string) string {
+func escapeText(s string) string {
 	r := strings.NewReplacer(`\`, `\\`, `(`, `\(`, `)`, `\)`)
 	return r.Replace(s)
 }

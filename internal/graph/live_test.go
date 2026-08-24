@@ -1,34 +1,51 @@
 package graph
 
 // Live tests exercise the real Neo4j container from deploy/docker-compose.yml.
-// Guard: they skip unless DJ_MEMORY_LIVE_TEST is set, so `go test ./...` stays
-// hermetic. Run with:
+// Guard: they skip unless DJ_MEMORY_LIVE_TEST=1 — the single project-wide live
+// gate, shared with internal/search and internal/cold — so `go test ./...`
+// stays hermetic. Run with:
 //
-//	docker compose -f deploy/docker-compose.yml up -d neo4j
-//	DJ_MEMORY_LIVE_TEST=1 go test ./internal/graph/ -run Live -v
+//	make live
+//	# or: DJ_MEMORY_LIVE_TEST=1 go test ./internal/graph/ -run Live -v
 
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"testing"
 	"time"
 
+	"github.com/drakejin/memory-mcp/internal/errs"
 	"github.com/drakejin/memory-mcp/internal/hotstore"
 	"github.com/drakejin/memory-mcp/internal/knowledge"
-	"github.com/drakejin/memory-mcp/internal/ulid"
 )
 
-func liveClient(t *testing.T) (*Client, context.Context) {
+// liveEnvVar is the one opt-in gate for every live test in this repo; the same
+// name and the same exact-"1" comparison appear in internal/search and
+// internal/cold, and `make live` sets it (code-standards §3).
+const (
+	liveEnvVar   = "DJ_MEMORY_LIVE_TEST"
+	liveEnvValue = "1"
+)
+
+// Fixed local credentials (architecture-v2.md §8).
+const (
+	liveDefaultURL = "bolt://127.0.0.1:7687"
+	liveUser       = "neo4j"
+	livePassword   = "djmemory-local"
+)
+
+func liveClient(t *testing.T) (Client, context.Context) {
 	t.Helper()
-	if os.Getenv("DJ_MEMORY_LIVE_TEST") == "" {
-		t.Skip("live Neo4j test: set DJ_MEMORY_LIVE_TEST=1 with the compose neo4j container running")
+	if os.Getenv(liveEnvVar) != liveEnvValue {
+		t.Skip("live Neo4j test: set " + liveEnvVar + "=" + liveEnvValue + " with the compose neo4j container running (make live)")
 	}
 	url := os.Getenv("DJ_MEMORY_NEO4J_URL")
 	if url == "" {
-		url = "bolt://127.0.0.1:7687"
+		url = liveDefaultURL
 	}
-	c, err := NewClient(url, "neo4j", "djmemory-local")
+	c, err := New(Config{URL: url, User: liveUser, Password: livePassword})
 	if err != nil {
 		t.Fatalf("new client: %v", err)
 	}
@@ -47,11 +64,17 @@ func liveClient(t *testing.T) (*Client, context.Context) {
 
 // liveKey isolates each run under a unique project so parallel/dirty
 // containers never interfere; cleanup deletes only this project's nodes.
-func liveKey(t *testing.T, c *Client, ctx context.Context) hotstore.ProjectKey {
+func liveKey(t *testing.T, c Client) hotstore.ProjectKey {
 	t.Helper()
-	key := hotstore.ProjectKey{Workspace: "livetest", Team: "graph", Project: "p" + ulid.New()[20:]}
+	// Real wall-clock nanoseconds, not newID(): fixture ids are a deterministic
+	// counter, which would hand every run the same project and break isolation.
+	key := hotstore.ProjectKey{Workspace: "livetest", Team: "graph", Project: fmt.Sprintf("p%d", time.Now().UnixNano())}
+	impl, ok := c.(*client)
+	if !ok {
+		t.Fatalf("live client is %T, want *client", c)
+	}
 	t.Cleanup(func() {
-		_, err := c.write(context.Background(),
+		_, err := impl.write(context.Background(), "graph.livetest",
 			`MATCH (n:`+nodeLabel+` {ws: $ws, team: $team, proj: $proj}) DETACH DELETE n`,
 			withKey(key, nil))
 		if err != nil {
@@ -63,7 +86,7 @@ func liveKey(t *testing.T, c *Client, ctx context.Context) hotstore.ProjectKey {
 
 func liveNode(name, body string, aliases []string, created time.Time) knowledge.Node {
 	return knowledge.Node{
-		ID:      ulid.New(),
+		ID:      newID(),
 		Kind:    knowledge.KindFact,
 		Name:    name,
 		Body:    body,
@@ -77,7 +100,7 @@ func liveNode(name, body string, aliases []string, created time.Time) knowledge.
 
 func TestLiveUpsertIdempotentAndCount(t *testing.T) {
 	c, ctx := liveClient(t)
-	key := liveKey(t, c, ctx)
+	key := liveKey(t, c)
 
 	n1 := liveNode("nori 분석기", "한국어 형태소 분석", []string{"nori"}, time.Now().UTC())
 	n2 := liveNode("neo4j merge", "MERGE는 멱등", nil, time.Now().UTC())
@@ -88,7 +111,7 @@ func TestLiveUpsertIdempotentAndCount(t *testing.T) {
 			t.Fatalf("upsert nodes (pass %d): %v", i, err)
 		}
 	}
-	edge := knowledge.Edge{From: n1.ID, To: n2.ID, Rel: knowledge.RelRelatesTo, Provenance: []string{ulid.New()}, Confidence: 0.8}
+	edge := knowledge.Edge{From: n1.ID, To: n2.ID, Rel: knowledge.RelRelatesTo, Provenance: []string{newID()}, Confidence: 0.8}
 	for i := 0; i < 2; i++ {
 		if err := c.UpsertEdges(ctx, key, []knowledge.Edge{edge}); err != nil {
 			t.Fatalf("upsert edges (pass %d): %v", i, err)
@@ -117,14 +140,14 @@ func TestLiveUpsertIdempotentAndCount(t *testing.T) {
 	if _, err := c.Neighborhood(ctx, key, "nori", 1); err != nil {
 		t.Fatalf("neighborhood by alias: %v", err)
 	}
-	if _, err := c.Neighborhood(ctx, key, "없는-엔티티", 1); !errors.Is(err, knowledge.ErrNodeNotFound) {
-		t.Fatalf("missing entity: want ErrNodeNotFound, got %v", err)
+	if _, err := c.Neighborhood(ctx, key, "없는-엔티티", 1); !errors.Is(err, errs.ErrNotFound) {
+		t.Fatalf("missing entity: want KindNotFound, got %v", err)
 	}
 }
 
 func TestLiveFulltextSearchAndArchivedOptIn(t *testing.T) {
 	c, ctx := liveClient(t)
-	key := liveKey(t, c, ctx)
+	key := liveKey(t, c)
 
 	active := liveNode("보안 플러그인 설정", "로컬 컨테이너는 보안을 끄고 기동한다", nil, time.Now().UTC())
 	archived := liveNode("옛 보안 설정", "예전 보안 방식", nil, time.Now().UTC())
@@ -163,7 +186,7 @@ func TestLiveFulltextSearchAndArchivedOptIn(t *testing.T) {
 
 func TestLiveSupersedeChainAndPurge(t *testing.T) {
 	c, ctx := liveClient(t)
-	key := liveKey(t, c, ctx)
+	key := liveKey(t, c)
 
 	base := time.Now().UTC().Add(-2 * time.Hour)
 	oldest := liveNode("v1 사실", "처음 앎", nil, base)
@@ -202,8 +225,8 @@ func TestLiveSupersedeChainAndPurge(t *testing.T) {
 		}
 	}
 
-	if _, err := c.SupersedeChain(ctx, key, ulid.New()); !errors.Is(err, knowledge.ErrNodeNotFound) {
-		t.Fatalf("missing node: want ErrNodeNotFound, got %v", err)
+	if _, err := c.SupersedeChain(ctx, key, newID()); !errors.Is(err, errs.ErrNotFound) {
+		t.Fatalf("missing node: want KindNotFound, got %v", err)
 	}
 
 	// Purge the oldest (archived) node; count drops and chain shrinks.
@@ -219,19 +242,23 @@ func TestLiveSupersedeChainAndPurge(t *testing.T) {
 	}
 }
 
-func TestLiveUnavailableWrapsErrUnavailable(t *testing.T) {
-	if os.Getenv("DJ_MEMORY_LIVE_TEST") == "" {
-		t.Skip("live Neo4j test: set DJ_MEMORY_LIVE_TEST=1")
+func TestLiveUnavailableIsDegradedSignal(t *testing.T) {
+	if os.Getenv(liveEnvVar) != liveEnvValue {
+		t.Skip("live Neo4j test: set " + liveEnvVar + "=" + liveEnvValue + " (make live)")
 	}
-	// A closed port must surface ErrUnavailable, never a raw driver error.
-	c, err := NewClient("bolt://127.0.0.1:1", "neo4j", "djmemory-local")
+	// A closed port must surface KindUnavailable, never a raw driver error.
+	c, err := New(Config{URL: "bolt://127.0.0.1:1", User: liveUser, Password: livePassword})
 	if err != nil {
 		t.Fatalf("new client: %v", err)
 	}
-	defer c.Close(context.Background())
+	defer func() {
+		if err := c.Close(context.Background()); err != nil {
+			t.Logf("close: %v", err)
+		}
+	}()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if err := c.Ping(ctx); !errors.Is(err, ErrUnavailable) {
-		t.Fatalf("ping on dead port: want ErrUnavailable, got %v", err)
+	if err := c.Ping(ctx); !errors.Is(err, errs.ErrUnavailable) {
+		t.Fatalf("ping on dead port: want KindUnavailable, got %v", err)
 	}
 }

@@ -10,7 +10,9 @@ package blackbox
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"mime/multipart"
@@ -25,6 +27,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/drakejin/memory-mcp/internal/graph"
 	"github.com/drakejin/memory-mcp/internal/hotstore"
 	"github.com/drakejin/memory-mcp/internal/search"
 )
@@ -214,9 +217,20 @@ func (h *harness) compose(args ...string) (string, error) {
 	return runCmd(h.repoRoot, "docker", full...)
 }
 
+// composeFresh recreates both derived stores with no data, which is what
+// scenarios 1 and 5 are built on.
+//
+// -v is load-bearing. The compose file declares no volumes (§8: the derived
+// stores are intentionally non-persistent), but the neo4j image declares
+// VOLUME /data /logs, so every `up` creates two fresh anonymous volumes that a
+// plain `down` leaves behind. This suite calls composeFresh twice per run, so
+// without -v each run leaks four volumes until the Docker disk fills and
+// container creation fails with ENOSPC — which reads as a bogus "container
+// name already in use" on the following run, because the half-created
+// containers are never cleaned up either.
 func (h *harness) composeFresh(t *testing.T) {
 	t.Helper()
-	if out, err := h.compose("down", "--remove-orphans"); err != nil {
+	if out, err := h.compose("down", "-v", "--remove-orphans"); err != nil {
 		failf(t, "docker compose down: %v\n%s", err, out)
 	}
 	if out, err := h.compose("up", "-d", "--build"); err != nil {
@@ -346,7 +360,26 @@ func (h *harness) stopServer(logger *slog.Logger) {
 type envelope struct {
 	Success bool            `json:"success"`
 	Data    json.RawMessage `json:"data"`
-	Error   string          `json:"error"`
+	Error   *envelopeError  `json:"error"`
+}
+
+// envelopeError mirrors the public projection of internal/server/apierr.Error:
+// a stable code, a client-safe message and any deliberately published details.
+type envelopeError struct {
+	Code    string         `json:"code"`
+	Message string         `json:"message"`
+	Details map[string]any `json:"details,omitempty"`
+}
+
+// String keeps the "error=%q" failure messages readable, nil included.
+func (e *envelopeError) String() string {
+	if e == nil {
+		return ""
+	}
+	if len(e.Details) == 0 {
+		return e.Code + ": " + e.Message
+	}
+	return fmt.Sprintf("%s: %s %v", e.Code, e.Message, e.Details)
 }
 
 func (h *harness) do(t *testing.T, method, path string, body io.Reader, contentType string) (int, envelope) {
@@ -468,8 +501,34 @@ func (h *harness) knowledgeHotPath() string {
 // store opens the canonical hot store rooted at the harness home. Used only
 // for fixture injection (marking an episode consolidated, §10.6) and for
 // structured hot-file assertions; the format stays correct by construction.
-func (h *harness) store() hotstore.Store {
-	return hotstore.New(h.home, hotstore.SystemClock{})
+func (h *harness) store(t *testing.T) hotstore.Client {
+	t.Helper()
+	store, err := hotstore.New(hotstore.Config{Home: h.home, Clock: hotstore.NewSystemClock()})
+	if err != nil {
+		failf(t, "open canonical hot store at %s: %v", h.home, err)
+	}
+	return store
+}
+
+// graphClient opens a direct Neo4j client — the traversal channel scenarios 3
+// and 5 assert on, independent of the server's own connection. It is closed
+// when the scenario ends so a driver pool never outlives its test.
+func (h *harness) graphClient(t *testing.T) graph.Client {
+	t.Helper()
+	client, err := graph.New(graph.Config{
+		URL:      neo4jBoltURL,
+		User:     neo4jUser,
+		Password: neo4jPassword,
+	})
+	if err != nil {
+		failf(t, "neo4j client: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := client.Close(context.Background()); err != nil {
+			t.Logf("neo4j client close: %v", err)
+		}
+	})
+	return client
 }
 
 // ---------- S3 via aws CLI (independent verification channel) ----------

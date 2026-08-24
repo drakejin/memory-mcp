@@ -1,5 +1,15 @@
 basePath: /
 definitions:
+  apierr.Error:
+    properties:
+      code:
+        type: string
+      details:
+        additionalProperties: {}
+        type: object
+      message:
+        type: string
+    type: object
   consolidate.Candidate:
     properties:
       entities:
@@ -71,6 +81,15 @@ definitions:
         items:
           type: string
         type: array
+      degraded:
+        description: |-
+          Degraded names every derived plane whose best-effort mirror failed. The
+          hot write succeeded regardless (§1), so an ingest that could not index
+          its chunks or MERGE its document node still reports 201 — but it says so
+          here rather than claiming a mirror that does not exist (§0 principle 3).
+        items:
+          type: string
+        type: array
       extractable:
         description: |-
           Extractable is false when no deterministic text layer exists (e.g.
@@ -85,7 +104,7 @@ definitions:
       truncated:
         allOf:
         - $ref: '#/definitions/document.Truncation'
-        description: Truncated is non-nil when the 500-chunk cap cut the tail.
+        description: Truncated is non-nil when the chunk cap cut the tail.
     type: object
   document.Truncation:
     properties:
@@ -127,7 +146,10 @@ definitions:
       consolidated:
         description: |-
           Consolidated marks the record as distilled into knowledge; a
-          precondition for cold archival (§3). Never auto-set by the server.
+          precondition for cold archival (§3). Never inferred by the server: it is
+          set only where the agent states the distillation itself, by naming this
+          record in the provenance of a POST .../knowledge/nodes (§3, §0
+          principle 2).
         type: boolean
       entities:
         description: Entities are normalized entity names mentioned by this record.
@@ -140,7 +162,7 @@ definitions:
       kind:
         allOf:
         - $ref: '#/definitions/episodic.Kind'
-        description: Kind is one of Kinds.
+        description: Kind is one of the values accepted by ValidKind.
       last_recalled:
         type: string
       occurred_at:
@@ -201,6 +223,8 @@ definitions:
       body:
         type: string
       created:
+        description: Created/Updated marshal as RFC3339 and are stored UTC by the
+          writers.
         type: string
       id:
         description: ID is a ULID; immutable.
@@ -409,7 +433,7 @@ definitions:
     properties:
       data: {}
       error:
-        type: string
+        $ref: '#/definitions/apierr.Error'
       success:
         type: boolean
     type: object
@@ -906,6 +930,10 @@ paths:
             $ref: '#/definitions/server.Envelope'
         "404":
           description: Not Found
+          schema:
+            $ref: '#/definitions/server.Envelope'
+        "409":
+          description: node is still active — archive or deprecate it first (§3)
           schema:
             $ref: '#/definitions/server.Envelope'
       summary: Purge a node from hot (S3 versioning is the backstop)

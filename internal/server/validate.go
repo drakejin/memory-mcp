@@ -2,17 +2,18 @@ package server
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/drakejin/memory-mcp/internal/blob"
 	"github.com/drakejin/memory-mcp/internal/episodic"
 	"github.com/drakejin/memory-mcp/internal/hotstore"
-	"github.com/drakejin/memory-mcp/internal/knowledge"
+	"github.com/drakejin/memory-mcp/internal/server/apierr"
 	"github.com/drakejin/memory-mcp/internal/ulid"
 )
 
@@ -29,31 +30,63 @@ const (
 	maxGraphDepth     = 10
 )
 
+// Path, query and form parameter names, plus the one accepted spelling of a
+// true boolean: §7 booleans are an exact "true" comparison, so "1" and "yes"
+// read as false.
+const (
+	paramWorkspace       = "ws"
+	paramTeam            = "team"
+	paramProject         = "proj"
+	paramID              = "id"
+	paramSHA             = "sha"
+	paramQuery           = "q"
+	paramFrom            = "from"
+	paramTo              = "to"
+	paramKinds           = "kinds"
+	paramEntity          = "entity"
+	paramDepth           = "depth"
+	paramIncludeArchived = "include_archived"
+	paramConfirm         = "confirm"
+	paramVerify          = "verify"
+	formFieldFile        = "file"
+	valueTrue            = "true"
+)
+
 // keySegmentPattern mirrors the hotstore rule: lowercase [a-z0-9._-], so keys
 // embed safely in file paths and S3 keys (§1). The server validates at the
 // HTTP boundary; the hotstore validates again on its own boundary.
 var keySegmentPattern = regexp.MustCompile(`^[a-z0-9._-]+$`)
 
-// shaHexPattern is a full lowercase-hex sha256 path parameter.
-var shaHexPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
-
 // validateProjectKey checks every {ws}/{team}/{proj} segment.
-func validateProjectKey(k hotstore.ProjectKey) error {
-	for name, seg := range map[string]string{"ws": k.Workspace, "team": k.Team, "proj": k.Project} {
-		if seg == "" {
-			return fmt.Errorf("path segment %q must not be empty", name)
+func validateProjectKey(k hotstore.ProjectKey) *apierr.Error {
+	for _, seg := range []struct{ name, value string }{
+		{paramWorkspace, k.Workspace},
+		{paramTeam, k.Team},
+		{paramProject, k.Project},
+	} {
+		if seg.value == "" {
+			return badRequest(fmt.Sprintf("path segment %q must not be empty", seg.name))
 		}
-		if seg == "." || seg == ".." || !keySegmentPattern.MatchString(seg) {
-			return fmt.Errorf("path segment %q must match [a-z0-9._-]+ and not be a dot path", name)
+		if seg.value == "." || seg.value == ".." || !keySegmentPattern.MatchString(seg.value) {
+			return badRequest(fmt.Sprintf("path segment %q must match [a-z0-9._-]+ and not be a dot path", seg.name))
 		}
 	}
 	return nil
 }
 
-// validateSHA checks a sha256 path parameter.
-func validateSHA(sha string) error {
-	if !shaHexPattern.MatchString(sha) {
-		return errors.New("sha must be a lowercase hex sha256")
+// validateSHA checks a sha256 path parameter. The format itself is owned by
+// internal/blob, which addresses content by it.
+func validateSHA(sha string) *apierr.Error {
+	if !blob.ValidSHA(sha) {
+		return badRequest("sha must be a lowercase hex sha256")
+	}
+	return nil
+}
+
+// validateULID checks an episode or node id path parameter.
+func validateULID(id string) *apierr.Error {
+	if !ulid.Valid(id) {
+		return badRequest("id must be a ULID")
 	}
 	return nil
 }
@@ -73,46 +106,58 @@ func splitProject(raw string) []string {
 	return parts
 }
 
-// errInvalidProject is the single user-facing message for a malformed project
-// selector — shape and segment-charset problems read the same to the caller.
-func errInvalidProject(raw string) error {
-	return fmt.Errorf("project %q must be \"ws/team/proj\" with [a-z0-9._-] segments", raw)
+// parseProjectString parses a "ws/team/proj" selector. Shape and segment-charset
+// problems read the same to the caller: both mean "this is not a project".
+func parseProjectString(raw string) (hotstore.ProjectKey, *apierr.Error) {
+	invalid := badRequest(fmt.Sprintf("project %q must be \"ws/team/proj\" with [a-z0-9._-] segments", raw))
+	parts := splitProject(raw)
+	if parts == nil {
+		return hotstore.ProjectKey{}, invalid
+	}
+	key := hotstore.ProjectKey{Workspace: parts[0], Team: parts[1], Project: parts[2]}
+	if err := validateProjectKey(key); err != nil {
+		return hotstore.ProjectKey{}, invalid
+	}
+	return key, nil
 }
 
 // decodeJSON reads a size-capped JSON body into dst. allowEmpty tolerates an
-// empty body (used by endpoints whose body is optional).
-func decodeJSON(w http.ResponseWriter, r *http.Request, dst any, allowEmpty bool) error {
+// empty body (used by endpoints whose body is optional). Content-Type is not
+// inspected: a valid JSON body is accepted whatever it claims to be.
+func decodeJSON(w http.ResponseWriter, r *http.Request, dst any, allowEmpty bool) *apierr.Error {
 	r.Body = http.MaxBytesReader(w, r.Body, maxJSONBodyBytes)
 	raw, err := io.ReadAll(r.Body)
 	if err != nil {
-		return errors.New("request body unreadable or too large")
+		return badRequest("request body unreadable or too large")
 	}
 	if len(strings.TrimSpace(string(raw))) == 0 {
 		if allowEmpty {
 			return nil
 		}
-		return errors.New("request body must not be empty")
+		return badRequest("request body must not be empty")
 	}
 	if err := json.Unmarshal(raw, dst); err != nil {
-		return errors.New("request body must be valid JSON: " + err.Error())
+		// The parse error describes the caller's own bytes, so echoing it
+		// leaks nothing about the server.
+		return badRequest("request body must be valid JSON: " + err.Error())
 	}
 	return nil
 }
 
 // parseTimeParam parses an optional RFC3339 query parameter.
-func parseTimeParam(raw, name string) (time.Time, error) {
+func parseTimeParam(raw, name string) (time.Time, *apierr.Error) {
 	if raw == "" {
 		return time.Time{}, nil
 	}
 	t, err := time.Parse(time.RFC3339, raw)
 	if err != nil {
-		return time.Time{}, fmt.Errorf("%s must be RFC3339", name)
+		return time.Time{}, badRequest(name + " must be RFC3339")
 	}
 	return t, nil
 }
 
 // parseKindsParam parses the comma-separated kinds filter.
-func parseKindsParam(raw string) ([]episodic.Kind, error) {
+func parseKindsParam(raw string) ([]episodic.Kind, *apierr.Error) {
 	if raw == "" {
 		return nil, nil
 	}
@@ -123,68 +168,31 @@ func parseKindsParam(raw string) ([]episodic.Kind, error) {
 			continue
 		}
 		k := episodic.Kind(part)
-		if !isEpisodicKind(k) {
-			return nil, fmt.Errorf("unknown kind %q", part)
+		if !episodic.ValidKind(k) {
+			return nil, badRequest(fmt.Sprintf("unknown kind %q", part))
 		}
 		kinds = append(kinds, k)
 	}
 	return kinds, nil
 }
 
-func isEpisodicKind(k episodic.Kind) bool {
-	for _, known := range episodic.Kinds {
-		if k == known {
-			return true
-		}
+// parseDepthParam bounds the §7 neighborhood traversal depth.
+func parseDepthParam(raw string) (int, *apierr.Error) {
+	if raw == "" {
+		return defaultGraphDepth, nil
 	}
-	return false
-}
-
-func isActor(a episodic.Actor) bool {
-	switch a {
-	case episodic.ActorAgent, episodic.ActorUser, episodic.ActorSystem:
-		return true
+	depth, err := strconv.Atoi(raw)
+	if err != nil || depth < defaultGraphDepth || depth > maxGraphDepth {
+		return 0, badRequest(fmt.Sprintf("depth must be an integer between %d and %d", defaultGraphDepth, maxGraphDepth))
 	}
-	return false
-}
-
-func isNodeKind(k knowledge.NodeKind) bool {
-	switch k {
-	case knowledge.KindEntity, knowledge.KindFact, knowledge.KindLesson, knowledge.KindPreference, knowledge.KindDocument:
-		return true
-	}
-	return false
-}
-
-func isNodeState(s knowledge.State) bool {
-	switch s {
-	case knowledge.StateActive, knowledge.StateArchived, knowledge.StateDeprecated:
-		return true
-	}
-	return false
-}
-
-func isTrust(t knowledge.Trust) bool {
-	switch t {
-	case knowledge.TrustUserStated, knowledge.TrustAgentInferred, knowledge.TrustImported:
-		return true
-	}
-	return false
-}
-
-func isRel(rel knowledge.Rel) bool {
-	switch rel {
-	case knowledge.RelRelatesTo, knowledge.RelDerivedFrom, knowledge.RelSupersedes, knowledge.RelAbout:
-		return true
-	}
-	return false
+	return depth, nil
 }
 
 // validateULIDs checks every id in ids and names the offending field.
-func validateULIDs(ids []string, field string) error {
+func validateULIDs(ids []string, field string) *apierr.Error {
 	for _, id := range ids {
-		if !ulid.IsULID(id) {
-			return fmt.Errorf("%s contains a malformed ULID %q", field, id)
+		if !ulid.Valid(id) {
+			return badRequest(fmt.Sprintf("%s contains a malformed ULID %q", field, id))
 		}
 	}
 	return nil

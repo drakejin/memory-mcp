@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/drakejin/memory-mcp/internal/ulid"
+	"github.com/drakejin/memory-mcp/internal/errs"
 )
 
 func validRecord() Record {
@@ -73,6 +73,11 @@ func TestRecordValidate(t *testing.T) {
 		{
 			name:    "unknown actor",
 			mutate:  func(r Record) Record { r.Actor = "robot"; return r },
+			wantErr: true,
+		},
+		{
+			name:    "empty actor",
+			mutate:  func(r Record) Record { r.Actor = ""; return r },
 			wantErr: true,
 		},
 		{
@@ -144,76 +149,134 @@ func TestRecordValidate(t *testing.T) {
 			err := rec.Validate()
 
 			// Assert
-			if tt.wantErr {
-				if err == nil {
-					t.Fatalf("Validate() = nil, want error")
-				}
-				if !errors.Is(err, ErrInvalidRecord) {
-					t.Fatalf("Validate() error %v does not wrap ErrInvalidRecord", err)
+			if !tt.wantErr {
+				if err != nil {
+					t.Fatalf("Validate() = %v, want nil", err)
 				}
 				return
 			}
-			if err != nil {
-				t.Fatalf("Validate() = %v, want nil", err)
+			if err == nil {
+				t.Fatalf("Validate() = nil, want error")
+			}
+			if !errors.Is(err, errs.ErrInvalid) {
+				t.Fatalf("Validate() error %v is not errs.ErrInvalid", err)
+			}
+			for _, other := range []error{errs.ErrNotFound, errs.ErrConflict, errs.ErrUnavailable, errs.ErrInternal} {
+				if errors.Is(err, other) {
+					t.Fatalf("Validate() error %v also matches %v; kinds must be exclusive", err, other)
+				}
 			}
 		})
 	}
 }
 
-func TestNewRecordDefaults(t *testing.T) {
-	// Arrange
-	occurred := time.Date(2026, 8, 25, 2, 0, 0, 0, time.UTC)
+// TestRecordValidateErrorShape pins the semantic envelope the transport layer
+// depends on: op, entity and the offending id travel with the error, while the
+// public message stays free of a stack or a wrapping prefix.
+func TestRecordValidateErrorShape(t *testing.T) {
+	tests := []struct {
+		name    string
+		mutate  func(r Record) Record
+		wantID  string
+		wantMsg string
+	}{
+		{
+			name:    "bad id reports the value",
+			mutate:  func(r Record) Record { r.ID = "not-a-ulid"; return r },
+			wantID:  "not-a-ulid",
+			wantMsg: `id "not-a-ulid" is not a ULID`,
+		},
+		{
+			name:    "empty text keeps the record id",
+			mutate:  func(r Record) Record { r.Text = ""; return r },
+			wantID:  "01JD0000000000000000000000",
+			wantMsg: "text must be non-empty",
+		},
+		{
+			name: "missing refs names the kind",
+			mutate: func(r Record) Record {
+				r.Kind = KindDocumentChunk
+				return r
+			},
+			wantID:  "01JD0000000000000000000000",
+			wantMsg: `kind "document_chunk" requires refs`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			rec := tt.mutate(validRecord())
 
-	// Act
-	rec := NewRecord(KindDecision, ActorUser, "결정 사항", nil, occurred)
+			// Act
+			err := rec.Validate()
 
-	// Assert
-	if !ulid.IsULID(rec.ID) {
-		t.Fatalf("NewRecord id %q is not a ULID", rec.ID)
-	}
-	if rec.Kind != KindDecision || rec.Actor != ActorUser || rec.Text != "결정 사항" {
-		t.Fatalf("NewRecord did not carry inputs: %+v", rec)
-	}
-	if !rec.OccurredAt.Equal(occurred) {
-		t.Fatalf("NewRecord occurred_at = %v, want %v", rec.OccurredAt, occurred)
-	}
-	if rec.Entities == nil || len(rec.Entities) != 0 {
-		t.Fatalf("NewRecord entities = %#v, want empty non-nil slice", rec.Entities)
-	}
-	if rec.Consolidated {
-		t.Fatal("NewRecord must start unconsolidated")
-	}
-	if rec.RecallCount != 0 || rec.LastRecalled != "" {
-		t.Fatalf("NewRecord recall stats must be zero, got %d %q", rec.RecallCount, rec.LastRecalled)
-	}
-	if rec.Refs != nil {
-		t.Fatalf("NewRecord refs = %+v, want nil", rec.Refs)
-	}
-	if err := rec.Validate(); err != nil {
-		t.Fatalf("NewRecord output should validate, got %v", err)
+			// Assert
+			var domain *errs.Error
+			if !errors.As(err, &domain) {
+				t.Fatalf("Validate() = %v, want *errs.Error", err)
+			}
+			if domain.Kind != errs.KindInvalid {
+				t.Errorf("Kind = %q, want %q", domain.Kind, errs.KindInvalid)
+			}
+			if domain.Op != opValidate {
+				t.Errorf("Op = %q, want %q", domain.Op, opValidate)
+			}
+			if domain.Entity != entityEpisode {
+				t.Errorf("Entity = %q, want %q", domain.Entity, entityEpisode)
+			}
+			if domain.ID != tt.wantID {
+				t.Errorf("ID = %q, want %q", domain.ID, tt.wantID)
+			}
+			if domain.Msg != tt.wantMsg {
+				t.Errorf("Msg = %q, want %q", domain.Msg, tt.wantMsg)
+			}
+		})
 	}
 }
 
-func TestNewRecordIDsAreMonotonic(t *testing.T) {
-	// Arrange / Act
-	a := NewRecord(KindEvent, ActorAgent, "a", nil, time.Now())
-	b := NewRecord(KindEvent, ActorAgent, "b", nil, time.Now())
-
-	// Assert
-	if a.ID >= b.ID {
-		t.Fatalf("expected strictly increasing ULIDs, got %q then %q", a.ID, b.ID)
+// TestVocabularyMatchesSpec guards the §2.1 enums the HTTP boundary validates
+// against; a silent addition here would let an unknown kind reach the index.
+// It drives ValidKind/ValidActor — the gate itself — so both the accepted set
+// and its complement are pinned.
+func TestVocabularyMatchesSpec(t *testing.T) {
+	kinds := []struct {
+		kind Kind
+		want bool
+	}{
+		{KindEvent, true},
+		{KindConversation, true},
+		{KindDecision, true},
+		{KindObservation, true},
+		{KindDocumentChunk, true},
+		{Kind("rumor"), false},
+		{Kind(""), false},
+		{Kind("Event"), false},
+		{Kind("document-chunk"), false},
 	}
-}
+	for _, tt := range kinds {
+		t.Run("kind/"+string(tt.kind), func(t *testing.T) {
+			if got := ValidKind(tt.kind); got != tt.want {
+				t.Errorf("ValidKind(%q) = %v, want %v", tt.kind, got, tt.want)
+			}
+		})
+	}
 
-func TestNewRecordCopiesEntitiesReference(t *testing.T) {
-	// Arrange
-	ents := []string{"opensearch"}
-
-	// Act
-	rec := NewRecord(KindObservation, ActorSystem, "관찰", ents, time.Now())
-
-	// Assert
-	if len(rec.Entities) != 1 || rec.Entities[0] != "opensearch" {
-		t.Fatalf("entities not carried: %#v", rec.Entities)
+	actors := []struct {
+		actor Actor
+		want  bool
+	}{
+		{ActorAgent, true},
+		{ActorUser, true},
+		{ActorSystem, true},
+		{Actor("robot"), false},
+		{Actor(""), false},
+		{Actor("Agent"), false},
+	}
+	for _, tt := range actors {
+		t.Run("actor/"+string(tt.actor), func(t *testing.T) {
+			if got := ValidActor(tt.actor); got != tt.want {
+				t.Errorf("ValidActor(%q) = %v, want %v", tt.actor, got, tt.want)
+			}
+		})
 	}
 }

@@ -2,29 +2,52 @@
 // one document = blob (original bytes, cold-first) + a knowledge document node
 // + document_chunk episodes. Extraction is deterministic only — no OCR, no
 // summarization; unextractable inputs are reported honestly.
+//
+// This package is a pipeline over injected clients rather than a client of its
+// own external system, so it takes the Service shape of code-standards §1.1:
+// an exported interface, an unexported implementation, one New(Config).
+// Every error leaving it is an *errs.Error.
 package document
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"io"
 	"log/slog"
-	"slices"
 	"time"
-	"unicode/utf8"
 
-	"github.com/drakejin/memory-mcp/internal/blob"
-	"github.com/drakejin/memory-mcp/internal/cold"
-	"github.com/drakejin/memory-mcp/internal/config"
 	"github.com/drakejin/memory-mcp/internal/episodic"
+	"github.com/drakejin/memory-mcp/internal/errs"
 	"github.com/drakejin/memory-mcp/internal/hotstore"
 	"github.com/drakejin/memory-mcp/internal/knowledge"
-	"github.com/drakejin/memory-mcp/internal/ulid"
 )
 
-// Truncation reports the honesty contract of §6 step 4: when a document
-// yields more than the chunk cap, the response states total vs indexed.
+// Ops carried by the errors of this package. They read as a call path, so a log
+// line names the operation without a stack trace.
+const (
+	opNew      = "document.New"
+	opIngest   = "document.Ingest"
+	opOriginal = "document.Original"
+	opChunks   = "document.Chunks"
+)
+
+// Entities carried by the errors of this package.
+const (
+	entityConfig   = "config"
+	entityDocument = "document"
+	entityChunk    = "document_chunk"
+	entityGraph    = "knowledge_graph"
+)
+
+// Degraded notes carried by IngestResult.Degraded. They mirror the server's
+// degraded vocabulary word for word (§5), so a client reads one wording whether
+// the note came from an episode write, a knowledge write or an ingest.
+const (
+	degradedSearch = "search unavailable"
+	degradedGraph  = "graph unavailable"
+)
+
+// Truncation reports the honesty contract of §6 step 4: when a document yields
+// more than the chunk cap, the response states total vs indexed.
 type Truncation struct {
 	Total   int `json:"total"`
 	Indexed int `json:"indexed"`
@@ -43,8 +66,13 @@ type IngestResult struct {
 	Extractable bool `json:"extractable"`
 	// ChunkIDs are the created document_chunk episode ids, in sequence order.
 	ChunkIDs []string `json:"chunk_ids"`
-	// Truncated is non-nil when the 500-chunk cap cut the tail.
+	// Truncated is non-nil when the chunk cap cut the tail.
 	Truncated *Truncation `json:"truncated,omitempty"`
+	// Degraded names every derived plane whose best-effort mirror failed. The
+	// hot write succeeded regardless (§1), so an ingest that could not index
+	// its chunks or MERGE its document node still reports 201 — but it says so
+	// here rather than claiming a mirror that does not exist (§0 principle 3).
+	Degraded []string `json:"degraded,omitempty"`
 }
 
 // Service is the document contract the HTTP layer depends on.
@@ -53,381 +81,138 @@ type Service interface {
 	// local cache, deterministic extraction, chunking into document_chunk
 	// episodes (indexed best-effort), and the knowledge document node.
 	Ingest(ctx context.Context, key hotstore.ProjectKey, filename string, data io.Reader) (IngestResult, error)
-	// Original opens the raw bytes by sha — local cache first, S3 rehydration
-	// on miss (§6 step 6). hotstore.ErrNotFound when unknown everywhere.
+	// Original opens the raw bytes by sha — local cache first, cold
+	// rehydration on miss (§6 step 6). Unknown everywhere is KindNotFound.
 	Original(ctx context.Context, sha string) (io.ReadCloser, error)
 	// Chunks returns the document_chunk episodes for sha in chunk_seq order.
 	Chunks(ctx context.Context, sha string) ([]episodic.Record, error)
 }
 
-// Chunk splits extracted text into ~chunkBytes chunks (UTF-8 safe: never
-// splits a rune) capped at maxChunks. Returned Truncation always carries the
-// true total; Truncated in IngestResult is only surfaced when total > indexed.
-// maxChunks <= 0 means uncapped.
-func Chunk(text string, chunkBytes, maxChunks int) ([]string, Truncation) {
-	if text == "" {
-		return nil, Truncation{}
-	}
-	if chunkBytes <= 0 {
-		chunkBytes = config.DocumentChunkBytes
-	}
-
-	var chunks []string
-	total := 0
-	start := 0
-	for i := 0; i < len(text); {
-		_, size := utf8.DecodeRuneInString(text[i:])
-		if i > start && (i-start)+size > chunkBytes {
-			total++
-			if maxChunks <= 0 || len(chunks) < maxChunks {
-				chunks = append(chunks, text[start:i])
-			}
-			start = i
-		}
-		i += size
-	}
-	// Final partial chunk (start < len(text) always holds for non-empty text).
-	total++
-	if maxChunks <= 0 || len(chunks) < maxChunks {
-		chunks = append(chunks, text[start:])
-	}
-
-	return chunks, Truncation{Total: total, Indexed: len(chunks)}
+// HotStore is the slice of the canonical JSON store this pipeline consumes
+// (code-standards §1.1). hotstore's file store satisfies it.
+type HotStore interface {
+	AppendEpisode(ctx context.Context, key hotstore.ProjectKey, rec episodic.Record) error
+	ListEpisodes(ctx context.Context, key hotstore.ProjectKey) ([]episodic.Record, error)
+	ListProjects(ctx context.Context) ([]hotstore.ProjectKey, error)
+	UpdateKnowledge(ctx context.Context, key hotstore.ProjectKey, fn func(knowledge.Graph) (knowledge.Graph, error)) error
+	MarkDirty(ctx context.Context, key hotstore.ProjectKey, plane hotstore.Plane) error
 }
 
-// Ingestor is the concrete Service wired from the storage layers.
-type Ingestor struct {
-	deps Deps
-}
-
-// Deps are the collaborators of Ingestor; every field is an interface so unit
-// tests inject fakes.
-type Deps struct {
-	Store     hotstore.Store
-	Cache     BlobCache
-	Archiver  BlobArchiver
-	Index     RecordIndexer
-	Graph     NodeUpserter
-	Extractor Extractor
-	Clock     hotstore.Clock
-}
-
-// BlobCache is the subset of blob.Cache the pipeline needs (kept local to
-// avoid a dependency knot; blob.FileCache satisfies it).
+// BlobCache is the local content-addressed cache of original bytes.
 type BlobCache interface {
-	Put(ctx context.Context, data io.Reader) (sha string, size int64, err error)
+	// Put streams data into the cache, returning its lowercase hex sha256 and
+	// size; re-putting an existing sha is an idempotent no-op.
+	Put(ctx context.Context, data io.Reader) (string, int64, error)
+	// Get opens a cached blob.
 	Get(ctx context.Context, sha string) (io.ReadCloser, error)
+	// Has reports whether the blob is cached. It is what tells a cache miss
+	// (fall back to cold) apart from a real read failure, without this package
+	// having to know the cache's error vocabulary.
+	Has(ctx context.Context, sha string) (bool, error)
 }
 
-// BlobArchiver is the subset of cold.Archiver the pipeline needs.
+// BlobArchiver is the slice of the cold archive this pipeline consumes.
 type BlobArchiver interface {
-	UploadBlob(ctx context.Context, sha string, r io.Reader) (s3Key string, err error)
+	UploadBlob(ctx context.Context, sha string, r io.Reader) (string, error)
 	FetchBlob(ctx context.Context, sha string) (io.ReadCloser, error)
-	BlobExists(ctx context.Context, sha string) (bool, error)
 }
 
-// RecordIndexer is the subset of search.Index the pipeline needs (best-effort;
-// failure marks manifest dirty, never fails the ingest).
+// RecordIndexer mirrors chunk episodes into the episodic search index. It is
+// best-effort: a failure marks the manifest dirty, it never fails an ingest.
 type RecordIndexer interface {
 	IndexRecords(ctx context.Context, key hotstore.ProjectKey, recs []episodic.Record) error
 }
 
-// NodeUpserter is the subset of graph.Store the pipeline needs to mirror the
-// auto-created document node (best-effort).
+// NodeUpserter mirrors the auto-created document node into the knowledge graph,
+// also best-effort.
 type NodeUpserter interface {
 	UpsertNodes(ctx context.Context, key hotstore.ProjectKey, nodes []knowledge.Node) error
 }
 
+// Clock supplies wall-clock time. It is injected so chunk timestamps and ULIDs
+// are deterministic under test (code-standards §1.1 — no direct time.Now()).
+type Clock interface {
+	Now() time.Time
+}
+
+// IDGenerator mints the ids of chunk episodes and of the document node. Ids
+// from one generator are strictly increasing, which is what keeps chunks minted
+// inside the same millisecond in sequence order.
+type IDGenerator interface {
+	GenerateAt(unixMillis int64) (string, error)
+}
+
+// Config is the single construction path for a Service.
+type Config struct {
+	// Store is the canonical hot JSON store. Required.
+	Store HotStore
+	// Cache is the local blob cache. Required.
+	Cache BlobCache
+	// Clock stamps chunk episodes and node timestamps. Required.
+	Clock Clock
+	// IDs mints chunk and node ids. Required.
+	IDs IDGenerator
+	// Archiver is cold storage. Optional: without it §6 step 2 (cold-first)
+	// cannot hold, so Ingest reports the pipeline unavailable.
+	Archiver BlobArchiver
+	// Index mirrors chunks into search. Optional: nil degrades to dirty marks.
+	Index RecordIndexer
+	// Graph mirrors the document node. Optional: nil degrades to dirty marks.
+	Graph NodeUpserter
+	// Extractor produces deterministic text. Optional: nil selects the
+	// built-in PDF/markdown/text extractor.
+	Extractor Extractor
+	// Logger receives degraded-mode reports. Optional: nil uses slog.Default().
+	Logger *slog.Logger
+}
+
+// service is the concrete pipeline. It holds no mutable state, so it is safe
+// for concurrent use by the HTTP handlers.
+type service struct {
+	store     HotStore
+	cache     BlobCache
+	clock     Clock
+	ids       IDGenerator
+	archiver  BlobArchiver
+	index     RecordIndexer
+	graph     NodeUpserter
+	extractor Extractor
+	log       *slog.Logger
+}
+
 // Compile-time contract check.
-var _ Service = (*Ingestor)(nil)
+var _ Service = (*service)(nil)
 
-// NewIngestor wires a concrete document Service.
-func NewIngestor(deps Deps) *Ingestor {
-	return &Ingestor{deps: deps}
-}
-
-// ErrColdUnavailable is returned by Ingest when the S3 layer is down: blobs
-// are cold-first (§6 step 2), so an ingest without a confirmed cold copy would
-// silently rely on the evictable local cache.
-var ErrColdUnavailable = errors.New("document: cold storage unavailable")
-
-// Ingest implements Service.
-func (i *Ingestor) Ingest(ctx context.Context, key hotstore.ProjectKey, filename string, data io.Reader) (IngestResult, error) {
-	d := i.deps
-
-	// Step 1: sha256 — Cache.Put hashes while writing the local cache copy.
-	sha, _, err := d.Cache.Put(ctx, data)
-	if err != nil {
-		return IngestResult{}, fmt.Errorf("document: cache original: %w", err)
-	}
-	res := IngestResult{SHA: sha, ChunkIDs: []string{}}
-
-	// Step 2: cold-first blob upload (idempotent per sha).
-	if d.Archiver == nil {
-		return IngestResult{}, ErrColdUnavailable
-	}
-	blobKey, err := i.uploadBlob(ctx, sha)
-	if err != nil {
-		return IngestResult{}, err
-	}
-	res.BlobKey = blobKey
-
-	// Step 3: deterministic extraction.
-	text, extractable, err := i.extract(ctx, filename, sha)
-	if err != nil {
-		return IngestResult{}, err
-	}
-	res.Extractable = extractable
-
-	now := d.Clock.Now()
-
-	// Step 4: chunk into document_chunk episodes (skipped when unextractable).
-	if extractable {
-		chunkIDs, trunc, err := i.ensureChunks(ctx, key, sha, text, now)
-		if err != nil {
-			return IngestResult{}, err
-		}
-		res.ChunkIDs = chunkIDs
-		if trunc.Total > trunc.Indexed {
-			t := trunc
-			res.Truncated = &t
-		}
+// New wires a document Service from cfg. It performs no I/O.
+func New(cfg Config) (Service, error) {
+	switch {
+	case cfg.Store == nil:
+		return nil, errs.Invalid(opNew, entityConfig, "hot store must not be nil")
+	case cfg.Cache == nil:
+		return nil, errs.Invalid(opNew, entityConfig, "blob cache must not be nil")
+	case cfg.Clock == nil:
+		return nil, errs.Invalid(opNew, entityConfig, "clock must not be nil")
+	case cfg.IDs == nil:
+		return nil, errs.Invalid(opNew, entityConfig, "id generator must not be nil")
 	}
 
-	// Step 5: knowledge document node (filename + sha, no summary).
-	nodeID, err := i.ensureDocumentNode(ctx, key, filename, sha, now)
-	if err != nil {
-		return IngestResult{}, err
+	extractor := cfg.Extractor
+	if extractor == nil {
+		extractor = textExtractor{}
 	}
-	res.NodeID = nodeID
-
-	return res, nil
-}
-
-// uploadBlob streams the cached blob to cold. Same-sha uploads are idempotent
-// at the Archiver level.
-func (i *Ingestor) uploadBlob(ctx context.Context, sha string) (string, error) {
-	rc, err := i.deps.Cache.Get(ctx, sha)
-	if err != nil {
-		return "", fmt.Errorf("document: reopen cached blob %s: %w", sha, err)
+	log := cfg.Logger
+	if log == nil {
+		log = slog.Default()
 	}
-	defer rc.Close()
-	blobKey, err := i.deps.Archiver.UploadBlob(ctx, sha, rc)
-	if err != nil {
-		return "", fmt.Errorf("document: upload blob %s: %w", sha, err)
-	}
-	return blobKey, nil
-}
-
-// extract reopens the cached original and runs the deterministic extractor.
-func (i *Ingestor) extract(ctx context.Context, filename, sha string) (string, bool, error) {
-	rc, err := i.deps.Cache.Get(ctx, sha)
-	if err != nil {
-		return "", false, fmt.Errorf("document: reopen cached blob %s: %w", sha, err)
-	}
-	defer rc.Close()
-	return i.deps.Extractor.Extract(ctx, filename, rc)
-}
-
-// ensureChunks appends document_chunk episodes for sha unless they already
-// exist (same-sha re-ingest is idempotent). Indexing is best-effort: failure
-// marks the manifest dirty and never fails the ingest (§1).
-func (i *Ingestor) ensureChunks(ctx context.Context, key hotstore.ProjectKey, sha, text string, now time.Time) ([]string, Truncation, error) {
-	d := i.deps
-
-	existing, err := d.Store.ListEpisodes(ctx, key)
-	if err != nil {
-		return nil, Truncation{}, fmt.Errorf("document: list episodes for %s: %w", key.String(), err)
-	}
-	if ids := chunkIDsFor(existing, sha); len(ids) > 0 {
-		// Re-ingest of a known document: report the truth about what is
-		// indexed without appending duplicates.
-		_, trunc := Chunk(text, config.DocumentChunkBytes, config.MaxDocumentChunks)
-		trunc.Indexed = min(trunc.Indexed, len(ids))
-		return ids, trunc, nil
-	}
-
-	chunks, trunc := Chunk(text, config.DocumentChunkBytes, config.MaxDocumentChunks)
-	ids := make([]string, 0, len(chunks))
-	recs := make([]episodic.Record, 0, len(chunks))
-	for seq, chunk := range chunks {
-		rec := episodic.Record{
-			ID:         ulid.At(now.UnixMilli()),
-			Kind:       episodic.KindDocumentChunk,
-			OccurredAt: now,
-			Actor:      episodic.ActorSystem,
-			Text:       chunk,
-			Entities:   []string{},
-			Refs:       &episodic.Refs{DocSHA: sha, ChunkSeq: seq},
-		}
-		if err := d.Store.AppendEpisode(ctx, key, rec); err != nil {
-			return nil, Truncation{}, fmt.Errorf("document: append chunk %d for %s: %w", seq, sha, err)
-		}
-		ids = append(ids, rec.ID)
-		recs = append(recs, rec)
-	}
-
-	if len(recs) > 0 {
-		if err := i.indexBestEffort(ctx, key, recs); err != nil {
-			slog.Warn("document: chunk indexing degraded; manifest marked dirty",
-				"project", key.String(), "sha", sha, "error", err)
-			if derr := d.Store.MarkDirty(ctx, key, hotstore.PlaneEpisodic); derr != nil {
-				slog.Warn("document: mark dirty failed", "project", key.String(), "error", derr)
-			}
-		}
-	}
-	return ids, trunc, nil
-}
-
-func (i *Ingestor) indexBestEffort(ctx context.Context, key hotstore.ProjectKey, recs []episodic.Record) error {
-	if i.deps.Index == nil {
-		return errors.New("search index unavailable")
-	}
-	return i.deps.Index.IndexRecords(ctx, key, recs)
-}
-
-// ensureDocumentNode finds or creates the auto document node for sha and
-// mirrors a new node into the graph best-effort.
-func (i *Ingestor) ensureDocumentNode(ctx context.Context, key hotstore.ProjectKey, filename, sha string, now time.Time) (string, error) {
-	d := i.deps
-
-	g, err := d.Store.ReadKnowledge(ctx, key)
-	if err != nil {
-		return "", fmt.Errorf("document: read knowledge for %s: %w", key.String(), err)
-	}
-	for _, n := range g.Nodes {
-		if n.Kind == knowledge.KindDocument && slices.Contains(n.Aliases, sha) {
-			return n.ID, nil // same-sha re-ingest: node already exists
-		}
-	}
-
-	node := knowledge.Node{
-		ID:         ulid.At(now.UnixMilli()),
-		Kind:       knowledge.KindDocument,
-		Name:       filename,
-		Body:       "sha256:" + sha,
-		Aliases:    []string{sha},
-		State:      knowledge.StateActive,
-		Trust:      knowledge.TrustImported,
-		Supersedes: []string{},
-		Provenance: []string{},
-		Created:    now,
-		Updated:    now,
-	}
-	next := knowledge.Graph{
-		Nodes: append(slices.Clone(g.Nodes), node),
-		Edges: slices.Clone(g.Edges),
-	}
-	if err := d.Store.WriteKnowledge(ctx, key, next); err != nil {
-		return "", fmt.Errorf("document: write knowledge for %s: %w", key.String(), err)
-	}
-
-	if err := i.upsertNodeBestEffort(ctx, key, node); err != nil {
-		slog.Warn("document: graph upsert degraded; manifest marked dirty",
-			"project", key.String(), "sha", sha, "error", err)
-		if derr := d.Store.MarkDirty(ctx, key, hotstore.PlaneKnowledge); derr != nil {
-			slog.Warn("document: mark dirty failed", "project", key.String(), "error", derr)
-		}
-	}
-	return node.ID, nil
-}
-
-func (i *Ingestor) upsertNodeBestEffort(ctx context.Context, key hotstore.ProjectKey, node knowledge.Node) error {
-	if i.deps.Graph == nil {
-		return errors.New("graph store unavailable")
-	}
-	return i.deps.Graph.UpsertNodes(ctx, key, []knowledge.Node{node})
-}
-
-// Original implements Service: local cache first, cold rehydration on miss
-// (§6 step 6). The rehydrated copy is re-cached for the next read.
-func (i *Ingestor) Original(ctx context.Context, sha string) (io.ReadCloser, error) {
-	d := i.deps
-
-	rc, err := d.Cache.Get(ctx, sha)
-	if err == nil {
-		return rc, nil
-	}
-	if !errors.Is(err, blob.ErrNotCached) {
-		return nil, fmt.Errorf("document: cache read %s: %w", sha, err)
-	}
-
-	if d.Archiver == nil {
-		return nil, fmt.Errorf("document: blob %s not cached and cold unavailable: %w", sha, hotstore.ErrNotFound)
-	}
-	cool, err := d.Archiver.FetchBlob(ctx, sha)
-	if err != nil {
-		if errors.Is(err, cold.ErrNotFound) {
-			return nil, fmt.Errorf("document: blob %s: %w", sha, hotstore.ErrNotFound)
-		}
-		return nil, fmt.Errorf("document: fetch blob %s from cold: %w", sha, err)
-	}
-
-	cachedSHA, _, err := d.Cache.Put(ctx, cool)
-	cool.Close()
-	if err != nil {
-		// Cache repopulation failed; stream directly from cold instead.
-		slog.Warn("document: blob re-cache failed; streaming from cold", "sha", sha, "error", err)
-		return d.Archiver.FetchBlob(ctx, sha)
-	}
-	if cachedSHA != sha {
-		return nil, fmt.Errorf("document: cold blob %s hashed to %s — corrupt cold object", sha, cachedSHA)
-	}
-	return d.Cache.Get(ctx, sha)
-}
-
-// Chunks implements Service: scans all projects for document_chunk episodes
-// referencing sha and returns them in chunk_seq order.
-func (i *Ingestor) Chunks(ctx context.Context, sha string) ([]episodic.Record, error) {
-	d := i.deps
-
-	projects, err := d.Store.ListProjects(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("document: list projects: %w", err)
-	}
-	out := []episodic.Record{}
-	for _, key := range projects {
-		recs, err := d.Store.ListEpisodes(ctx, key)
-		if err != nil {
-			return nil, fmt.Errorf("document: list episodes for %s: %w", key.String(), err)
-		}
-		for _, rec := range recs {
-			if rec.Kind == episodic.KindDocumentChunk && rec.Refs != nil && rec.Refs.DocSHA == sha {
-				out = append(out, rec)
-			}
-		}
-	}
-	slices.SortFunc(out, func(x, y episodic.Record) int {
-		if x.Refs.ChunkSeq != y.Refs.ChunkSeq {
-			return x.Refs.ChunkSeq - y.Refs.ChunkSeq
-		}
-		if x.ID < y.ID {
-			return -1
-		}
-		if x.ID > y.ID {
-			return 1
-		}
-		return 0
-	})
-	return out, nil
-}
-
-// chunkIDsFor returns existing chunk episode ids for sha in chunk_seq order.
-func chunkIDsFor(recs []episodic.Record, sha string) []string {
-	type seqID struct {
-		seq int
-		id  string
-	}
-	var found []seqID
-	for _, rec := range recs {
-		if rec.Kind == episodic.KindDocumentChunk && rec.Refs != nil && rec.Refs.DocSHA == sha {
-			found = append(found, seqID{seq: rec.Refs.ChunkSeq, id: rec.ID})
-		}
-	}
-	slices.SortFunc(found, func(x, y seqID) int { return x.seq - y.seq })
-	ids := make([]string, 0, len(found))
-	for _, f := range found {
-		ids = append(ids, f.id)
-	}
-	return ids
+	return &service{
+		store:     cfg.Store,
+		cache:     cfg.Cache,
+		clock:     cfg.Clock,
+		ids:       cfg.IDs,
+		archiver:  cfg.Archiver,
+		index:     cfg.Index,
+		graph:     cfg.Graph,
+		extractor: extractor,
+		log:       log,
+	}, nil
 }

@@ -24,11 +24,11 @@ import (
 	"github.com/drakejin/memory-mcp/internal/consolidate"
 	"github.com/drakejin/memory-mcp/internal/document"
 	"github.com/drakejin/memory-mcp/internal/episodic"
-	"github.com/drakejin/memory-mcp/internal/graph"
-	"github.com/drakejin/memory-mcp/internal/hotstore"
+	"github.com/drakejin/memory-mcp/internal/errs"
 	"github.com/drakejin/memory-mcp/internal/knowledge"
 	"github.com/drakejin/memory-mcp/internal/rehydrate"
 	"github.com/drakejin/memory-mcp/internal/server"
+	pdffixture "github.com/drakejin/memory-mcp/test/fixtures/pdf"
 )
 
 // §10.1 — fresh compose up → /healthz green, swagger doc served.
@@ -164,10 +164,7 @@ func TestScenario03_KnowledgeSupersedeChain(t *testing.T) {
 		Trust: knowledge.TrustUserStated, Provenance: []string{h.epIDs[0]}, Supersedes: []string{f1.ID}})
 	pass(t, "facts stored: f1=%s f2=%s f3=%s (f3 supersedes f1)", f1.ID, f2.ID, f3.ID)
 
-	gr, err := graph.NewClient(neo4jBoltURL, neo4jUser, neo4jPassword)
-	if err != nil {
-		failf(t, "neo4j client: %v", err)
-	}
+	gr := h.graphClient(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	h.waitFor(t, "Neo4j SupersedeChain traversal shows f1→f3, oldest first", 20*time.Second, func() (bool, string) {
@@ -227,7 +224,7 @@ func TestScenario03_KnowledgeSupersedeChain(t *testing.T) {
 func TestScenario04_DocumentIngest(t *testing.T) {
 	requireReady(t)
 
-	pdfBytes := makeMinimalPDF(pdfFixtureLines)
+	pdfBytes := pdffixture.Minimal(pdfFixtureLines)
 	status, env := h.postMultipart(t, h.projPath()+"/documents", "file", "blackbox-fixture.pdf", pdfBytes)
 	if status != http.StatusCreated || !env.Success {
 		failf(t, "document ingest: want 201 success, got HTTP %d error=%q", status, env.Error)
@@ -367,10 +364,7 @@ func TestScenario05_Rehydration(t *testing.T) {
 		return false, fmt.Sprintf("hit ids=%v (want %s)", hitIDs(hits), h.noriHitID)
 	})
 
-	gr, err := graph.NewClient(neo4jBoltURL, neo4jUser, neo4jPassword)
-	if err != nil {
-		failf(t, "neo4j client: %v", err)
-	}
+	gr := h.graphClient(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	chain, err := gr.SupersedeChain(ctx, hotKey, h.fact3ID)
@@ -413,13 +407,13 @@ func TestScenario06_Consolidation(t *testing.T) {
 	// Fixture: flip consolidated=true through the canonical store — the
 	// server never auto-consolidates (§0 principle 2), distillation is the
 	// agent's job, and this harness plays the agent.
-	if err := h.store().UpdateEpisodes(ctx, hotKey, []string{h.oldID}, func(r episodic.Record) episodic.Record {
+	if err := h.store(t).UpdateEpisodes(ctx, hotKey, []string{h.oldID}, func(r episodic.Record) episodic.Record {
 		r.Consolidated = true
 		return r
 	}); err != nil {
 		failf(t, "mark fixture consolidated via hotstore: %v", err)
 	}
-	got, err := h.store().GetEpisode(ctx, hotKey, h.oldID)
+	got, err := h.store(t).GetEpisode(ctx, hotKey, h.oldID)
 	if err != nil || !got.Consolidated {
 		failf(t, "fixture readback: want consolidated=true, got %+v err=%v", got, err)
 	}
@@ -461,7 +455,7 @@ func TestScenario06_Consolidation(t *testing.T) {
 	if !bytes.Contains(raw, []byte(h.staleID)) {
 		failf(t, "stale unconsolidated episode %s was removed from hot — §3.1 forbids aging undistilled records", h.staleID)
 	}
-	if _, err := h.store().GetEpisode(ctx, hotKey, h.oldID); !errors.Is(err, hotstore.ErrNotFound) {
+	if _, err := h.store(t).GetEpisode(ctx, hotKey, h.oldID); !errors.Is(err, errs.ErrNotFound) {
 		failf(t, "hot GetEpisode(%s): want ErrNotFound after aging, got err=%v", h.oldID, err)
 	}
 	pass(t, "hot state honest: aged %s removed, stale unconsolidated %s remains", h.oldID, h.staleID)
@@ -522,7 +516,7 @@ func TestScenario07_DegradedMode(t *testing.T) {
 	h.degradedID = resp.Record.ID
 	pass(t, "episode %s written during outage: HTTP 201 with degraded=%v", h.degradedID, resp.Degraded)
 
-	if rec, err := h.store().GetEpisode(ctx, hotKey, h.degradedID); err != nil || rec.Text != degradedText {
+	if rec, err := h.store(t).GetEpisode(ctx, hotKey, h.degradedID); err != nil || rec.Text != degradedText {
 		failf(t, "hot store must own the degraded-mode write: %+v err=%v", rec, err)
 	}
 	sStatus, _ := h.searchEpisodes(t, "degradedmarkerx")
@@ -574,12 +568,33 @@ func TestScenario08_StatusHonesty(t *testing.T) {
 	}
 	pass(t, "drift clean: episodic=%+v knowledge=%+v", st.Drift.Episodic, st.Drift.Knowledge)
 
-	// Exact honesty accounting: 3 Korean episodes + PDF chunks + stale aged
-	// fixture + degraded-mode episode. The aged consolidated one sank to cold.
-	wantUnconsolidated := len(koreanEpisodeTexts) + h.chunkCount + 1 + 1
+	// Scenario 3 distilled Korean episodes 0 and 1 into fact nodes and named
+	// them in provenance. Per §3 that naming IS the promotion, so the server
+	// marked exactly those two consolidated. Assert that first: the count below
+	// is only meaningful if it is right for this reason.
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	store := h.store(t)
+	promoted := map[string]bool{h.epIDs[0]: true, h.epIDs[1]: true}
+	for i, id := range h.epIDs {
+		rec, err := store.GetEpisode(ctx, hotKey, id)
+		if err != nil {
+			failf(t, "read korean episode %d (%s) from hot: %v", i, id, err)
+		}
+		if rec.Consolidated != promoted[id] {
+			failf(t, "korean episode %d (%s): consolidated=%v, want %v — §3 promotion marks exactly the provenance-named episodes",
+				i, id, rec.Consolidated, promoted[id])
+		}
+	}
+	pass(t, "§3 promotion honest: episodes %v distilled into knowledge are consolidated, %s is not", h.epIDs[:2], h.epIDs[2])
+
+	// Exact honesty accounting of what is left undistilled: the one Korean
+	// episode no fact node claimed + PDF chunks + the stale aged fixture + the
+	// degraded-mode episode. The aged consolidated one sank to cold in §10.6.
+	wantUnconsolidated := (len(koreanEpisodeTexts) - len(promoted)) + h.chunkCount + 1 + 1
 	if st.Unconsolidated != wantUnconsolidated {
-		failf(t, "unconsolidated: want exactly %d (3 korean + %d chunks + 1 stale + 1 degraded), got %d",
-			wantUnconsolidated, h.chunkCount, st.Unconsolidated)
+		failf(t, "unconsolidated: want exactly %d (%d undistilled korean + %d chunks + 1 stale + 1 degraded), got %d",
+			wantUnconsolidated, len(koreanEpisodeTexts)-len(promoted), h.chunkCount, st.Unconsolidated)
 	}
 	if st.StaleUnconsolidated != 1 {
 		failf(t, "stale_unconsolidated: want exactly 1 (the 40-day fixture %s), got %d", h.staleID, st.StaleUnconsolidated)

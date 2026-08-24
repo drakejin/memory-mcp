@@ -59,7 +59,7 @@ type IngestResult struct {
 | ② cold-first blob 업로드 | `uploadBlob` → `cold.S3Archiver.UploadBlob` | 캐시본을 다시 열어 S3로 스트리밍 | ingest 실패. `Archiver == nil`이면 `ErrColdUnavailable` |
 | ③ 결정적 추출 | `extract` → `Extractor.Extract` | 캐시본을 다시 열어 텍스트 추출 | **IO/파싱 오류만** ingest 실패. "추출 불가"는 실패가 아니다 |
 | ④ 청킹 + hot append | `ensureChunks` → `Chunk` + `Store.AppendEpisode` | 청크마다 `document_chunk` 레코드 append | hot append 실패 시 ingest 실패. 색인 실패는 degraded |
-| ⑤ knowledge 문서 노드 | `ensureDocumentNode` → `Store.WriteKnowledge` | 그래프에 `kind=document` 노드 추가 | hot write 실패 시 ingest 실패. Neo4j 실패는 degraded |
+| ⑤ knowledge 문서 노드 | `ensureDocumentNode` → `Store.UpdateKnowledge` | 그래프에 `kind=document` 노드 추가 | hot write 실패 시 ingest 실패. Neo4j 실패는 degraded |
 
 - ④는 `extractable == true`일 때만 실행된다. 스캔 PDF 같은 입력은 청크가 0개인 채로 ②·⑤만 남는다.
 - ①과 ②는 파일을 두 번, ③은 세 번째로 읽는다. multipart 스트림은 ①에서 한 번만 소비되고, ②·③은 로컬 캐시에서 다시 연다(`Cache.Get`).
@@ -258,7 +258,7 @@ architecture-v2.md §6과 코드가 어긋나거나, 설계 원칙이 이 경로
 2. **`handleIngestDocument`는 `markIndexed`를 호출하지 않는다.** 다른 쓰기 핸들러는 파생 upsert 성공 후 manifest의 `indexed_at`과 `indexes.opensearch.last_hydrated_sha`를 갱신한다. 문서 ingest는 하지 않으므로, 아무 문제 없이 성공한 ingest 뒤에도 `CheckDrift`가 "episodic hot content changed since last hydration"을 보고할 수 있다(불필요한 재수화를 유발하되 데이터는 안전).
 3. **blob 로컬 캐시에 축출 경로가 없다.** 설계 §1·§3은 로컬 blob 캐시를 "축출 가능"이라고 규정하지만, `blob.Cache.Evict`와 `Has`에는 프로덕션 호출자가 없다(`main.go`는 `blob.New`만 호출). 즉 캐시는 자동으로 줄지 않고 무한히 자란다. 축출은 현재 수동(`rm`)이며, S3가 백스톱이므로 안전하기는 하다. 코드 규약 §4(데드코드) 기준으로는 두 메서드가 정리 대상이다.
 4. **도메인 에러가 `*errs.Error`가 아니다.** 코드 규약 §2는 핸들러 아래 모든 계층이 `internal/errs`의 의미 에러를 쓰고 핸들러가 `apierr.From`으로 변환하도록 요구하지만, `internal/errs`도 `internal/server/apierr`도 존재하지 않는다. `document`/`blob`/`cold`는 `fmt.Errorf`·`errors.New`와 센티넬(`ErrColdUnavailable`, `ErrNotCached`, `ErrNotFound`)을 쓰고, 핸들러는 센티넬 두 개만 404로 매핑한다. 이건 이 패키지만의 문제가 아니라 저장소 전체의 상태다([09 · 코드 구조](09-code-structure.md)).
-5. **문서 노드 생성은 read-modify-write이고 원자적이지 않다.** `ensureDocumentNode`는 `ReadKnowledge` → 슬라이스 clone + append → `WriteKnowledge` 순서로 동작한다. `hotstore.FileStore`의 뮤텍스는 각 호출 안에서만 잡히므로, 같은 프로젝트에 대한 동시 ingest(또는 동시 knowledge 노드 생성)는 노드를 잃을 수 있다. 로컬 단일 사용자 도구라는 전제 위에 서 있는 설계다.
+5. **문서 노드 생성은 원자적이다(수정 완료).** 예전 `ensureDocumentNode`는 `ReadKnowledge` → clone + append → `WriteKnowledge`의 세 호출로 동작했고, 스토어 뮤텍스가 각 호출 안에서만 잡히므로 같은 프로젝트에 대한 동시 ingest는 노드를 잃을 수 있었다. 지금은 `hotstore.UpdateKnowledge(ctx, key, fn)` 하나로 읽기·변환·쓰기를 한 번의 락 안에서 처리한다. `WriteKnowledge`는 제거됐다 — 그래프 변경 경로는 `UpdateKnowledge` 하나뿐이다. 회귀 방지는 `internal/hotstore/concurrency_test.go`와 `internal/server/handlers_knowledge_concurrency_test.go`.
 
 ## 11. 코드 위치
 

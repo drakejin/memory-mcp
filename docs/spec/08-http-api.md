@@ -1,11 +1,11 @@
-# 08. HTTP API — go-chi 라우팅과 Swagger
+# 08 — HTTP API: go-chi 라우팅과 Swagger
 
 루프백에만 묶인 go-chi 라우터가 16개 엔드포인트를 `{success, data, error}` 봉투로 노출하고, swaggo 주석이 그 스펙을 `docs/swagger.json`으로 생성한다.
 
 | 항목 | 내용 |
 |---|---|
 | 관련 코드 | [`internal/server/server.go`](../../internal/server/server.go) · [`respond.go`](../../internal/server/respond.go) · [`validate.go`](../../internal/server/validate.go) · [`degraded.go`](../../internal/server/degraded.go) · [`handlers_episodic.go`](../../internal/server/handlers_episodic.go) · [`handlers_knowledge.go`](../../internal/server/handlers_knowledge.go) · [`handlers_documents.go`](../../internal/server/handlers_documents.go) · [`handlers_ops.go`](../../internal/server/handlers_ops.go) · [`cmd/memory-mcp/main.go`](../../cmd/memory-mcp/main.go) · [`internal/config/config.go`](../../internal/config/config.go) |
-| 관련 스펙 | [04-episodic-search](04-episodic-search.md) · [05-knowledge-graph](05-knowledge-graph.md) · [06-documents](06-documents.md) · [07-rehydration](07-rehydration.md) · [10-operations](10-operations.md) · [11-testing](11-testing.md) |
+| 관련 스펙 | [01-overview](01-overview.md) · [03-lifecycle](03-lifecycle.md) · [04-episodic-search](04-episodic-search.md) · [05-knowledge-graph](05-knowledge-graph.md) · [06-documents](06-documents.md) · [07-rehydration](07-rehydration.md) · [10-operations](10-operations.md) · [11-testing](11-testing.md) · 인덱스: [README](README.md) |
 | 상태 | 구현 완료 — 라우트 16개 + `/swagger/*`, 전부 핸들러 본체 존재. `docs/swagger.json`은 라우터와 1:1 동기 상태 |
 
 ![memory-mcp HTTP 라우트 트리 — chi.NewRouter 아래 /healthz, /swagger/*, /v1 서브라우터와 프로젝트 스코프 중첩 라우터](assets/08-http-api.svg)
@@ -349,7 +349,7 @@ _ "github.com/drakejin/memory-mcp/docs" // swag-generated OpenAPI spec
 
 ---
 
-## 코드 위치
+## 8. 코드 위치
 
 | 개념 | 파일 | 심볼 |
 |---|---|---|

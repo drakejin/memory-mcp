@@ -1,11 +1,11 @@
-# 04. Episodic — OpenSearch와 한국어 형태소 검색
+# 04 — Episodic: OpenSearch와 한국어 형태소 검색
 
 episodic 평면의 검색 경로 — nori 형태소로 색인·질의하는 단일 OpenSearch 인덱스, 시간·kind 필터와 프로젝트 스코핑, 본문을 절대 돌려주지 않는 발췌 전용 응답 계약, 그리고 재수화 벌크 배칭.
 
 | 항목 | 내용 |
 |---|---|
 | 관련 코드 | `internal/search/{search,mapping,client}.go` · `internal/episodic/record.go` · `internal/server/handlers_episodic.go` · `deploy/opensearch/Dockerfile` |
-| 관련 스펙 | [02-storage-model](02-storage-model.md)(hot 정본·manifest) · [03-lifecycle](03-lifecycle.md)(에이징 시 색인 삭제) · [06-documents](06-documents.md)(document_chunk) · [07-rehydration](07-rehydration.md)(drift·벌크 재적재) · [08-http-api](08-http-api.md)(엔드포인트 표면) · [11-testing](11-testing.md)(live/blackbox) |
+| 관련 스펙 | [02-storage-model](02-storage-model.md)(hot 정본·manifest) · [03-lifecycle](03-lifecycle.md)(에이징 시 색인 삭제) · [06-documents](06-documents.md)(document_chunk) · [07-rehydration](07-rehydration.md)(drift·벌크 재적재) · [08-http-api](08-http-api.md)(엔드포인트 표면) · [11-testing](11-testing.md)(live/blackbox) · 인덱스: [README](README.md) |
 | 상태 | 구현 완료. 단위 테스트 `internal/search/client_test.go`(fake transport), 실물 통합 `live_test.go`(`DJ_TEST_LIVE=1`), 블랙박스 시나리오 2 통과 |
 
 ![Episodic 검색 경로 — HTTP 질의에서 nori 형태소 매칭까지](assets/04-episodic-search.svg)

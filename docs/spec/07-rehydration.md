@@ -5,7 +5,7 @@
 | 항목 | 내용 |
 |---|---|
 | 관련 코드 | `internal/rehydrate/rehydrate.go` · `internal/rehydrate/manifest.go` · `internal/server/startup.go` · `internal/server/degraded.go` · `internal/server/handlers_ops.go` · `deploy/docker-compose.yml` |
-| 관련 스펙 | [02-storage-model](02-storage-model.md)(manifest·hot 정본) · [04-episodic-search](04-episodic-search.md)(bulk 색인) · [05-knowledge-graph](05-knowledge-graph.md)(MERGE 멱등성) · [06-documents](06-documents.md)(문서 ingest 저하) · [08-http-api](08-http-api.md)(봉투·상태코드) · [10-operations](10-operations.md) · [11-testing](11-testing.md) |
+| 관련 스펙 | [02-storage-model](02-storage-model.md)(manifest·hot 정본) · [04-episodic-search](04-episodic-search.md)(bulk 색인) · [05-knowledge-graph](05-knowledge-graph.md)(MERGE 멱등성) · [06-documents](06-documents.md)(문서 ingest 저하) · [08-http-api](08-http-api.md)(봉투·상태코드) · [10-operations](10-operations.md) · [11-testing](11-testing.md) · 인덱스: [README](README.md) |
 | 상태 | 구현 완료. 단위 테스트 `internal/rehydrate/*_test.go`, 블랙박스 `TestScenario05_Rehydration` / `TestScenario07_DegradedMode` / `TestScenario08_Honesty` |
 
 ![재수화와 degraded 모드 타임라인](assets/07-rehydration.svg)
@@ -389,7 +389,7 @@ stat-gate의 판단 근거는 hot 파일의 dirty/mtime뿐이다(§4.2). 그래�
 
 ---
 
-## 코드 위치
+## 10. 코드 위치
 
 | 개념 | 파일 | 심볼 |
 |---|---|---|

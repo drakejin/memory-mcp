@@ -1,11 +1,11 @@
-# 09 · 코드 구조 — 패키지 경계·인터페이스·에러 계층
+# 09 — 코드 구조: 패키지 경계·인터페이스·에러 계층
 
 `internal/` 13개 패키지가 어떤 단일 책임을 지고, 어느 방향으로만 의존하며, 에러가 어느 한 지점에서 도메인 의미에서 HTTP 전송으로 바뀌는지.
 
 | 항목 | 내용 |
 |---|---|
 | 관련 코드 | `cmd/memory-mcp/main.go` · `internal/{blob,cold,config,consolidate,document,episodic,graph,hotstore,knowledge,rehydrate,search,server,ulid}` |
-| 관련 스펙 | [01-overview](01-overview.md) · [02-storage-model](02-storage-model.md) · [08-http-api](08-http-api.md) · [10-operations](10-operations.md) · [11-testing](11-testing.md) |
+| 관련 스펙 | [01-overview](01-overview.md) · [02-storage-model](02-storage-model.md) · [07-rehydration](07-rehydration.md) · [08-http-api](08-http-api.md) · [10-operations](10-operations.md) · [11-testing](11-testing.md) · 인덱스: [README](README.md) |
 | 상태 | 계층·인터페이스·주입은 **구현됨**. 2계층 에러 타입(`internal/errs` / `internal/server/apierr`)은 **미구현** — §5.1 참조 |
 
 ![패키지 계층과 에러 타입 경계](assets/09-code-structure.svg)

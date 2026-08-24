@@ -1,13 +1,12 @@
-# 05 · Knowledge 그래프 — Neo4j와 supersede 체인
+# 05 — Knowledge 그래프: Neo4j와 supersede 체인
 
 "지금 무엇이 참인가"를 담는 knowledge 평면의 노드·엣지 모델, Neo4j로 실제로 나가는 Cypher, 그리고 삭제 대신 개정으로 진실을 갱신하는 supersede 체인.
 
 | 항목 | 내용 |
 |---|---|
 | 관련 코드 | `internal/knowledge/knowledge.go` · `internal/graph/graph.go` · `internal/graph/convert.go` · `internal/server/handlers_knowledge.go` |
-| 관련 스펙 | [architecture-v2.md](../design/architecture-v2.md) §2·§2.2·§3·§5·§7 · [code-standards.md](../design/code-standards.md) |
-| 이웃 문서 | [02 · 저장 모델](02-storage-model.md) · [03 · 생명주기](03-lifecycle.md) · [04 · Episodic 검색](04-episodic-search.md) · [06 · 문서](06-documents.md) · [07 · 재수화](07-rehydration.md) · [08 · HTTP API](08-http-api.md) · [11 · 검증](11-testing.md) |
-| 상태 | 구현 완료. 본 문서는 위 Go 코드를 읽고 실측해서 쓴 것이며, 설계 문서와 어긋나는 지점은 ⚠️로 표시했다 |
+| 관련 스펙 | [01-overview](01-overview.md) · [02-storage-model](02-storage-model.md) · [03-lifecycle](03-lifecycle.md) · [04-episodic-search](04-episodic-search.md) · [06-documents](06-documents.md) · [07-rehydration](07-rehydration.md) · [08-http-api](08-http-api.md) · [11-testing](11-testing.md) · 인덱스: [README](README.md) |
+| 상태 | 구현 완료. 본 문서는 위 Go 코드를 읽고 실측해서 쓴 것이며, 설계 문서([architecture-v2.md](../design/architecture-v2.md) §2·§2.2·§3·§5·§7)와 어긋나는 지점은 ⚠️로 표시했다 |
 
 ![knowledge 그래프의 supersede 체인과 provenance 링크](assets/05-knowledge-graph.svg)
 

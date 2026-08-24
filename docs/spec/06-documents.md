@@ -1,13 +1,12 @@
-# 06 · 문서 — blob · 추출 · 청킹
+# 06 — 문서: blob · 추출 · 청킹
 
 문서 하나를 blob(원본 바이트) + knowledge `document` 노드 + N개의 episodic `document_chunk`로 분해해 세 저장 계층에 남기고, 청크 히트에서 원본 바이트까지 되짚어 오는 경로.
 
 | 항목 | 내용 |
 |---|---|
 | 관련 코드 | `internal/document/` (`document.go`, `extract.go`) · `internal/blob/blob.go` · `internal/cold/` (`cold.go`, `archive.go`, `keys.go`) · `internal/server/handlers_documents.go` · `cmd/memory-mcp/main.go` |
-| 관련 스펙 | [02 · 저장 모델](02-storage-model.md) · [03 · 생명주기](03-lifecycle.md) · [04 · Episodic 검색](04-episodic-search.md) · [05 · Knowledge 그래프](05-knowledge-graph.md) · [07 · 재수화와 degraded](07-rehydration.md) · [08 · HTTP API](08-http-api.md) |
-| 설계 근거 | [architecture-v2.md §6](../design/architecture-v2.md) — 이 문서는 설계가 아니라 **현재 코드**를 기술한다 |
-| 상태 | 구현 완료. 단위 테스트 `internal/document/document_test.go`·`extract_test.go`, 수용 시나리오 `test/blackbox/blackbox_test.go` `TestScenario04_DocumentIngest` |
+| 관련 스펙 | [01-overview](01-overview.md) · [02-storage-model](02-storage-model.md) · [03-lifecycle](03-lifecycle.md) · [04-episodic-search](04-episodic-search.md) · [05-knowledge-graph](05-knowledge-graph.md) · [07-rehydration](07-rehydration.md) · [08-http-api](08-http-api.md) · 인덱스: [README](README.md) |
+| 상태 | 구현 완료. 단위 테스트 `internal/document/document_test.go`·`extract_test.go`, 수용 시나리오 `test/blackbox/blackbox_test.go` `TestScenario04_DocumentIngest`. 설계 문서([architecture-v2.md](../design/architecture-v2.md) §6)가 아니라 **현재 코드**를 기술한다 |
 
 ![문서 ingest 파이프라인과 세 산출물](assets/06-documents.svg)
 
@@ -261,7 +260,7 @@ architecture-v2.md §6과 코드가 어긋나거나, 설계 원칙이 이 경로
 4. **도메인 에러가 `*errs.Error`가 아니다.** 코드 규약 §2는 핸들러 아래 모든 계층이 `internal/errs`의 의미 에러를 쓰고 핸들러가 `apierr.From`으로 변환하도록 요구하지만, `internal/errs`도 `internal/server/apierr`도 존재하지 않는다. `document`/`blob`/`cold`는 `fmt.Errorf`·`errors.New`와 센티넬(`ErrColdUnavailable`, `ErrNotCached`, `ErrNotFound`)을 쓰고, 핸들러는 센티넬 두 개만 404로 매핑한다. 이건 이 패키지만의 문제가 아니라 저장소 전체의 상태다([09 · 코드 구조](09-code-structure.md)).
 5. **문서 노드 생성은 read-modify-write이고 원자적이지 않다.** `ensureDocumentNode`는 `ReadKnowledge` → 슬라이스 clone + append → `WriteKnowledge` 순서로 동작한다. `hotstore.FileStore`의 뮤텍스는 각 호출 안에서만 잡히므로, 같은 프로젝트에 대한 동시 ingest(또는 동시 knowledge 노드 생성)는 노드를 잃을 수 있다. 로컬 단일 사용자 도구라는 전제 위에 서 있는 설계다.
 
-## 코드 위치
+## 11. 코드 위치
 
 | 개념 | 파일 | 심볼 |
 |---|---|---|

@@ -5,7 +5,7 @@
 | 항목 | 내용 |
 |---|---|
 | 관련 코드 | `cmd/memory-mcp/main.go` · `internal/server/{server,startup,degraded,respond}.go` · `internal/config/config.go` · `internal/hotstore` · `internal/search` · `internal/graph` · `internal/cold` · `internal/rehydrate` |
-| 관련 스펙 | [02-storage-model](02-storage-model.md) · [03-lifecycle](03-lifecycle.md) · [04-episodic-search](04-episodic-search.md) · [05-knowledge-graph](05-knowledge-graph.md) · [06-documents](06-documents.md) · [07-rehydration](07-rehydration.md) · [08-http-api](08-http-api.md) · [09-code-structure](09-code-structure.md) · [10-operations](10-operations.md) · [11-testing](11-testing.md) · 인덱스: [README](../../README.md) |
+| 관련 스펙 | [02-storage-model](02-storage-model.md) · [03-lifecycle](03-lifecycle.md) · [04-episodic-search](04-episodic-search.md) · [05-knowledge-graph](05-knowledge-graph.md) · [06-documents](06-documents.md) · [07-rehydration](07-rehydration.md) · [08-http-api](08-http-api.md) · [09-code-structure](09-code-structure.md) · [10-operations](10-operations.md) · [11-testing](11-testing.md) · 인덱스: [README](README.md) |
 | 상태 | 구현됨 — Go 1.25.9, `go-chi/chi/v5`, `opensearch-go/v4`, `neo4j-go-driver/v5`, `aws-sdk-go-v2`. 본 문서는 `docs/design/architecture-v2.md`(설계)가 아니라 **현재 소스 코드**를 기술한다 |
 
 ![memory-mcp 시스템 맵 — 클라이언트에서 chi HTTP 서버를 지나 hot 정본에 원자 쓰기를 하고, 파생 인덱스(OpenSearch·Neo4j)에 best-effort로 upsert하며, 아래에 S3 콜드 아카이브가 놓이고, 재수화 화살표가 hot에서 컨테이너로 올라가는 구조](assets/01-overview.svg)
@@ -230,7 +230,7 @@ POST .../documents
 4. **manifest 파일 키 헬퍼가 두 곳에 중복.** `hotstore.ManifestFileKey(plane, key)`와 `rehydrate.FileKey(plane, key)`가 같은 `"{plane}/{ws}/{team}/{proj}"` 문자열을 만든다. `code-standards.md` §4("중복 헬퍼는 삭제가 아니라 통합한다")와 어긋난다.
 5. **`server.notImplemented`는 프로덕션 경로에서 쓰이지 않는다.** 스캐폴드 잔존 스텁으로, 유일한 호출자가 `validate_test.go`다.
 
-## 코드 위치
+## 10. 코드 위치
 
 | 개념 | 파일 |
 |---|---|

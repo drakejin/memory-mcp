@@ -1,11 +1,11 @@
-# 검증 — 단위 테스트와 블랙박스 수용 기준
+# 11 — 검증: 단위 테스트와 블랙박스 수용 기준
 
 단위 테스트는 fake를 주입해 로직을 컨테이너 없이 고정하고, `test/blackbox`의 8단계는 실제 컨테이너·실제 S3 버킷·실제 서버 프로세스를 상대로 "저장돼야 할 것이 실제로 다 있는가"를 증명한다 — 완료 판정 권한은 후자에만 있다.
 
 | 항목 | 내용 |
 |---|---|
 | 관련 코드 | `test/blackbox/{blackbox_test.go,harness_test.go,fixtures_test.go,pdf.go,pdf_test.go}` · `internal/**/*_test.go` (24개) · `internal/search/live_test.go` · `internal/graph/live_test.go` · `Makefile`(`test`, `blackbox`) |
-| 관련 스펙 | [01-overview](01-overview.md) · [03-lifecycle](03-lifecycle.md) · [04-episodic-search](04-episodic-search.md) · [05-knowledge-graph](05-knowledge-graph.md) · [06-documents](06-documents.md) · [07-rehydration](07-rehydration.md) · [08-http-api](08-http-api.md) · [09-code-structure](09-code-structure.md) · [10-operations](10-operations.md) · 인덱스는 [README](../../README.md) |
+| 관련 스펙 | [01-overview](01-overview.md) · [03-lifecycle](03-lifecycle.md) · [04-episodic-search](04-episodic-search.md) · [05-knowledge-graph](05-knowledge-graph.md) · [06-documents](06-documents.md) · [07-rehydration](07-rehydration.md) · [08-http-api](08-http-api.md) · [09-code-structure](09-code-structure.md) · [10-operations](10-operations.md) · 인덱스: [README](README.md) |
 | 상태 | 단위 층은 코드 반영 완료(실측 커버리지 §7). 블랙박스 8단계는 코드로 존재하며 docker + AWS 자격증명이 있는 환경에서만 실행 가능 — 이 문서 작성 시점에는 실행하지 않았다. 설계 문서와의 차이는 §8 |
 
 ![단위(fake) / 라이브(실컨테이너, 옵트인) / 블랙박스(실컨테이너 + 실 S3 + 실 서버 프로세스) 세 층과 각 층이 판정하는 것](assets/11-testing.svg)

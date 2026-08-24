@@ -1,11 +1,11 @@
-# 메모리 생명주기 — 상태기계와 hot→cold 에이징
+# 03 — 메모리 생명주기: 상태기계와 hot→cold 에이징
 
 episodic은 append-only이고 유한하며, knowledge는 영구이고 상태 전이만 한다 — 두 평면의 수명 규칙, 이동 자격 판정식, 미통합 레코드 불변식, 그리고 절대 뒤집히지 않는 S3 put → hot 삭제 → 인덱스 삭제 순서를 코드 기준으로 규정한다.
 
 | 항목 | 내용 |
 |---|---|
 | 관련 코드 | `internal/knowledge/knowledge.go` · `internal/consolidate/{consolidate.go,cluster.go}` · `internal/config/config.go` · `internal/server/{handlers_knowledge.go,handlers_ops.go,handlers_episodic.go}` · `internal/cold/{archive.go,keys.go}` |
-| 관련 스펙 | [01-overview](01-overview.md) · [02-storage-model](02-storage-model.md) · [04-episodic-search](04-episodic-search.md) · [05-knowledge-graph](05-knowledge-graph.md) · [07-rehydration](07-rehydration.md) · [08-http-api](08-http-api.md) · [10-operations](10-operations.md) · [11-testing](11-testing.md) · 인덱스는 [README](../../README.md) |
+| 관련 스펙 | [01-overview](01-overview.md) · [02-storage-model](02-storage-model.md) · [04-episodic-search](04-episodic-search.md) · [05-knowledge-graph](05-knowledge-graph.md) · [07-rehydration](07-rehydration.md) · [08-http-api](08-http-api.md) · [10-operations](10-operations.md) · [11-testing](11-testing.md) · 인덱스: [README](README.md) |
 | 상태 | 코드 반영 완료. 설계 문서·주석과의 차이는 §8에 명시 |
 
 ![위쪽은 knowledge 노드의 active·archived·deprecated 상태기계와 purge 게이트, 아래쪽은 episodic 레코드가 ingest에서 S3 월별 배치까지 가라앉는 에이징 타임라인. 빨간 X는 코드가 막는 전이](assets/03-lifecycle.svg)

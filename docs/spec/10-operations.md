@@ -1,13 +1,12 @@
-# 10. 운영 — 기동·설정·인프라
+# 10 — 운영: 기동·설정·인프라
 
 `make start` 한 줄로 파생 컨테이너 2개를 띄우고 헬스체크를 기다린 뒤 호스트에서 서버를 실행하기까지, 실제 코드가 읽는 설정·포트·자격증명과 실패했을 때 보이는 문자열을 정리한다.
 
 | 항목 | 내용 |
 |---|---|
 | 관련 코드 | [`Makefile`](../../Makefile) · [`deploy/docker-compose.yml`](../../deploy/docker-compose.yml) · [`deploy/opensearch/Dockerfile`](../../deploy/opensearch/Dockerfile) · [`internal/config/config.go`](../../internal/config/config.go) · [`cmd/memory-mcp/main.go`](../../cmd/memory-mcp/main.go) · [`internal/cold/cold.go`](../../internal/cold/cold.go) · [`internal/server/startup.go`](../../internal/server/startup.go) |
-| 관련 스펙 | [01-overview.md](01-overview.md) · [02-storage-model.md](02-storage-model.md) · [07-rehydration.md](07-rehydration.md) · [08-http-api.md](08-http-api.md) · [09-code-structure.md](09-code-structure.md) · [11-testing.md](11-testing.md) |
-| 설계 근거 | [architecture-v2.md](../design/architecture-v2.md) §8(인프라) · §5(재수화) · §10.1(기동 수용 기준) |
-| 상태 | 구현 완료 — Makefile 15개 타깃, compose 서비스 2개, env 9개 모두 코드에 존재 |
+| 관련 스펙 | [01-overview](01-overview.md) · [02-storage-model](02-storage-model.md) · [03-lifecycle](03-lifecycle.md) · [07-rehydration](07-rehydration.md) · [08-http-api](08-http-api.md) · [09-code-structure](09-code-structure.md) · [11-testing](11-testing.md) · 인덱스: [README](README.md) |
+| 상태 | 구현 완료 — Makefile 15개 타깃, compose 서비스 2개, env 9개 모두 코드에 존재. 설계 근거는 [architecture-v2.md](../design/architecture-v2.md) §8(인프라)·§5(재수화)·§10.1(기동 수용 기준) |
 
 ![로컬 운영 구성: 호스트에서 실행되는 memory-mcp 서버(127.0.0.1:8420), docker compose가 띄운 볼륨 없는 OpenSearch(9200)와 Neo4j(7687/7474) 컨테이너, 그리고 머신 밖의 S3 버킷 vms-memory-mcp(ap-northeast-2)](assets/10-operations.svg)
 
@@ -365,7 +364,7 @@ level=WARN msg="search: episodic index lacks the nori mapping; dropping and recr
 
 ---
 
-## 코드 위치
+## 8. 코드 위치
 
 | 개념 | 파일 | 앵커 |
 |---|---|---|

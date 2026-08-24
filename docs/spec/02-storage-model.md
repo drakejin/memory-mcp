@@ -1,11 +1,11 @@
-# 저장 모델 — hot / derived / cold
+# 02 — 저장 모델: hot / derived / cold
 
 로컬 JSON(hot)이 유일한 정본이고, OpenSearch·Neo4j(derived)는 버려도 되는 뷰이며, S3(cold)는 에이징 목적지이자 purge 백스톱이다 — 이 세 계층의 실제 디렉토리·키·레코드 형태를 코드 기준으로 규정한다.
 
 | 항목 | 내용 |
 |---|---|
 | 관련 코드 | `internal/hotstore/{hotstore.go,filestore.go}` · `internal/episodic/record.go` · `internal/knowledge/knowledge.go` · `internal/blob/blob.go` · `internal/cold/{keys.go,archive.go,cold.go}` · `internal/config/config.go` |
-| 관련 스펙 | [01-overview](01-overview.md) · [03-lifecycle](03-lifecycle.md) · [05-knowledge-graph](05-knowledge-graph.md) · [06-documents](06-documents.md) · [07-rehydration](07-rehydration.md) · [09-code-structure](09-code-structure.md) · 인덱스는 [README](../../README.md) |
+| 관련 스펙 | [01-overview](01-overview.md) · [03-lifecycle](03-lifecycle.md) · [05-knowledge-graph](05-knowledge-graph.md) · [06-documents](06-documents.md) · [07-rehydration](07-rehydration.md) · [09-code-structure](09-code-structure.md) · 인덱스: [README](README.md) |
 | 상태 | 코드 반영 완료. 설계 문서와의 차이는 §10에 명시 |
 
 ![hot 로컬 트리와 S3 cold 키의 대응, 그 사이의 에이징·스냅샷·업로드·복원 방향](assets/02-storage-model.svg)
@@ -271,7 +271,7 @@ versioning이 꺼진 버킷에서는 purge가 되돌릴 수 없다. 운영 체�
 
 이 방향이 "안전한 쪽"인 이유: 3b가 실패하면 cold와 hot에 같은 레코드가 동시에 존재하는데, 다음 실행이 멱등하게 재아카이브하므로 수렴한다. 반대 순서였다면 3a 실패 시 데이터가 사라진다.
 
-관련 임계값은 전부 `internal/config/config.go`의 상수다: `DefaultEpisodicTTLDays=30`, `MaxProjectFileBytes=5<<20`(5MiB), `MaxProjectRecords=5000`.
+관련 임계값은 전부 `internal/config/config.go`의 상수다: `DefaultEpisodicTTLDays=30`, `MaxProjectFileBytes=5<<20`(5MiB), `MaxProjectRecords=5000`. **이 값들이 실제로 어떤 판정식에 들어가는지(TTL 규칙, 압박 규칙, 미통합 불변식)는 [03-lifecycle §3.2 `AgeEligible`](03-lifecycle.md#32-ageeligible--이동-자격-판정)이 단독으로 소유한다** — 본 문서는 저장 계층의 키·형태만 규정한다.
 
 ## 10. ⚠️ 설계 문서와 차이
 

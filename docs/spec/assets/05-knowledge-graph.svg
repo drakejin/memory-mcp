@@ -1,0 +1,94 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 576" width="960" role="img" aria-labelledby="t d" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">
+  <title id="t">knowledge 그래프의 supersede 체인과 provenance 링크</title>
+  <desc id="d">entity 노드 하나에 fact 노드 두 개가 about 엣지로 붙어 있고, active fact가 archived fact를 supersedes 엣지로 대체한다. 각 노드는 아래 episodic 평면의 episode를 provenance로 가리키며, cold로 내려간 episode도 id가 불변이라 링크가 유지된다.</desc>
+
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0 L10 5 L0 10 z" fill="#94a3b8"/>
+    </marker>
+  </defs>
+
+  <rect width="960" height="576" fill="#fbfcfe" rx="14"/>
+
+  <text x="32" y="38" font-size="15" font-weight="600" fill="#0f172a">Knowledge 그래프 — 노드·엣지와 supersede 체인</text>
+  <text x="32" y="58" font-size="11.5" fill="#64748b">정본은 knowledge/{ws}/{team}/{proj}.json — Neo4j는 MERGE로 언제든 재생되는 파생물이다</text>
+
+  <!-- knowledge plane band -->
+  <rect x="24" y="74" width="912" height="264" rx="14" fill="#fef3c7" fill-opacity="0.35" stroke="#d97706" stroke-opacity="0.5" stroke-width="1.6" stroke-dasharray="6 5"/>
+  <text x="40" y="98" font-size="13" font-weight="600" fill="#0f172a">knowledge 평면 · Neo4j :KnowledgeNode</text>
+  <text x="920" y="98" font-size="11.5" fill="#64748b" text-anchor="end">MERGE 키 {id, ws, team, proj} · 엣지는 :REL 단일 타입</text>
+
+  <!-- entity node -->
+  <rect x="380" y="126" width="200" height="72" rx="10" fill="#fef3c7" stroke="#d97706" stroke-width="1.6"/>
+  <text x="396" y="150" font-size="11.5" fill="#64748b">entity · active</text>
+  <text x="396" y="172" font-size="13" font-weight="600" fill="#0f172a">memory-mcp</text>
+  <text x="396" y="190" font-size="11.5" fill="#64748b">aliases: [mcp]</text>
+
+  <!-- fact F2 -->
+  <rect x="52" y="228" width="240" height="76" rx="10" fill="#fef3c7" stroke="#d97706" stroke-width="1.6"/>
+  <text x="68" y="252" font-size="11.5" fill="#64748b">fact · active · agent-inferred</text>
+  <text x="68" y="275" font-size="13" font-weight="600" fill="#0f172a">nori로 한국어를 쪼갠다</text>
+  <text x="68" y="294" font-size="11.5" fill="#64748b">01JD…7QA</text>
+
+  <!-- fact F3 (winner) -->
+  <rect x="360" y="228" width="240" height="76" rx="10" fill="#fef3c7" stroke="#d97706" stroke-width="1.6"/>
+  <text x="376" y="252" font-size="11.5" fill="#64748b">fact · active · user-stated</text>
+  <text x="376" y="275" font-size="13" font-weight="600" fill="#0f172a">보안을 끄고 기동한다</text>
+  <text x="376" y="294" font-size="11.5" fill="#64748b">01JD…9M4 · supersedes 01JD…3K1</text>
+
+  <!-- fact F1 (superseded, greyed) -->
+  <rect x="668" y="228" width="240" height="76" rx="10" fill="#f1f5f9" stroke="#475569" stroke-width="1.6"/>
+  <text x="684" y="252" font-size="11.5" fill="#64748b">fact · archived · 01JD…3K1</text>
+  <text x="684" y="275" font-size="13" font-weight="600" fill="#475569">보안을 켜고 기동한다</text>
+  <text x="684" y="294" font-size="11.5" fill="#64748b">superseded_by 01JD…9M4</text>
+
+  <!-- about edges -->
+  <path d="M164 228 V164 H374" fill="none" stroke="#94a3b8" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <text x="250" y="156" font-size="11.5" fill="#64748b" text-anchor="middle">about</text>
+  <path d="M796 228 V164 H586" fill="none" stroke="#94a3b8" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <text x="700" y="156" font-size="11.5" fill="#64748b" text-anchor="middle">about</text>
+  <path d="M480 228 V206" fill="none" stroke="#94a3b8" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <text x="492" y="219" font-size="11.5" fill="#64748b">about</text>
+
+  <!-- supersedes edge -->
+  <path d="M600 266 H660" fill="none" stroke="#94a3b8" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <text x="634" y="258" font-size="11.5" fill="#64748b" text-anchor="middle">supersedes</text>
+  <text x="634" y="322" font-size="11.5" fill="#64748b" text-anchor="middle">supersedes 엣지 · confidence 1.0</text>
+
+  <!-- provenance edges (derived, downward) -->
+  <path d="M164 304 V404" fill="none" stroke="#94a3b8" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+  <text x="176" y="358" font-size="11.5" fill="#64748b">provenance</text>
+  <path d="M480 304 V404" fill="none" stroke="#94a3b8" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+  <text x="492" y="358" font-size="11.5" fill="#64748b">provenance</text>
+  <path d="M796 304 V404" fill="none" stroke="#94a3b8" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+  <text x="808" y="358" font-size="11.5" fill="#64748b">provenance</text>
+
+  <!-- episodic plane band -->
+  <rect x="24" y="372" width="912" height="140" rx="14" fill="#ecfdf5" fill-opacity="0.5" stroke="#059669" stroke-opacity="0.5" stroke-width="1.6" stroke-dasharray="6 5"/>
+  <text x="40" y="396" font-size="13" font-weight="600" fill="#0f172a">episodic 평면 · hot JSON + OpenSearch</text>
+
+  <rect x="52" y="412" width="240" height="66" rx="10" fill="#ecfdf5" stroke="#059669" stroke-width="1.6"/>
+  <text x="68" y="436" font-size="11.5" fill="#64748b">episode · hot · 01JD…7QA</text>
+  <text x="68" y="460" font-size="13" fill="#0f172a">“nori 플러그인을 넣었다”</text>
+
+  <rect x="360" y="412" width="240" height="66" rx="10" fill="#ecfdf5" stroke="#059669" stroke-width="1.6"/>
+  <text x="376" y="436" font-size="11.5" fill="#64748b">episode · hot · 01JD…B2F</text>
+  <text x="376" y="460" font-size="13" fill="#0f172a">“보안을 끄고 다시 띄웠다”</text>
+
+  <rect x="668" y="412" width="240" height="66" rx="10" fill="#f1f5f9" stroke="#475569" stroke-width="1.6"/>
+  <text x="684" y="436" font-size="11.5" fill="#64748b">episode · cold(S3) · 01JD…C93</text>
+  <text x="684" y="460" font-size="13" fill="#475569">“보안을 켜고 띄웠다”</text>
+  <text x="908" y="498" font-size="11.5" fill="#64748b" text-anchor="end">cold로 내려가도 episode id는 불변 → provenance 유효</text>
+
+  <!-- legend -->
+  <rect x="40" y="532" width="14" height="14" rx="4" fill="#fef3c7" stroke="#d97706" stroke-width="1.6"/>
+  <text x="60" y="543" font-size="11.5" fill="#64748b">knowledge 노드</text>
+  <rect x="186" y="532" width="14" height="14" rx="4" fill="#f1f5f9" stroke="#475569" stroke-width="1.6"/>
+  <text x="206" y="543" font-size="11.5" fill="#64748b">archived / cold</text>
+  <rect x="318" y="532" width="14" height="14" rx="4" fill="#ecfdf5" stroke="#059669" stroke-width="1.6"/>
+  <text x="338" y="543" font-size="11.5" fill="#64748b">episodic record</text>
+  <path d="M452 539 H478" fill="none" stroke="#94a3b8" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <text x="492" y="543" font-size="11.5" fill="#64748b">:REL 엣지</text>
+  <path d="M580 539 H606" fill="none" stroke="#94a3b8" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+  <text x="620" y="543" font-size="11.5" fill="#64748b">provenance (파생 링크)</text>
+</svg>

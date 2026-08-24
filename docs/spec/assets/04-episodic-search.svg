@@ -1,0 +1,148 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 800" width="960" role="img" aria-labelledby="t d">
+  <title id="t">Episodic 검색 경로 — HTTP 질의에서 nori 형태소 매칭까지</title>
+  <desc id="d">GET /episodes/search 요청이 handleSearchEpisodes 검증과 statGate를 거쳐 buildSearchBody로 OpenSearch 질의가 되고, 질의문 "보안을 끄는"과 색인 본문 "보안을 끄고 배포했다"가 동일한 korean analyzer(nori_tokenizer + nori_part_of_speech)를 통과해 공통 토큰 보안·끄에서 매칭된 뒤, 발췌 전용 Hit으로 응답되고 hot 정본의 recall 통계가 best-effort로 갱신되는 흐름.</desc>
+  <rect width="960" height="800" fill="#fbfcfe" rx="14"/>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#94a3b8"/>
+    </marker>
+  </defs>
+  <g font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">
+
+    <text x="40" y="34" font-size="15" font-weight="600" fill="#0f172a">Episodic 검색 경로 — HTTP 질의에서 nori 형태소 매칭까지</text>
+    <text x="40" y="52" font-size="11.5" fill="#64748b">internal/server/handlers_episodic.go → internal/search/client.go → OpenSearch 인덱스 dj-memory-episodic</text>
+
+    <rect x="40" y="68" width="880" height="58" rx="10" fill="#f1f5f9" stroke="#475569" stroke-width="1.6"/>
+    <text x="56" y="92" font-size="13" fill="#0f172a">GET /v1/{ws}/{team}/{proj}/episodes/search?q=보안을 끄는&amp;from=…&amp;to=…&amp;kinds=event,decision</text>
+    <text x="56" y="112" font-size="11.5" fill="#64748b">handleSearchEpisodes — q 없으면 400 · from/to는 RFC3339 · kinds 화이트리스트 · statGate(2초 디바운스) 선행</text>
+
+    <path d="M480 126 L480 146" stroke="#94a3b8" stroke-width="1.6" fill="none" marker-end="url(#arrow)"/>
+
+    <rect x="40" y="150" width="880" height="112" rx="10" fill="#ecfdf5" stroke="#059669" stroke-width="1.6"/>
+    <text x="56" y="174" font-size="13" font-weight="600" fill="#0f172a">buildSearchBody() → POST /dj-memory-episodic/_search</text>
+
+    <rect x="56" y="188" width="272" height="58" rx="10" fill="#ffffff" stroke="#059669" stroke-width="1.6"/>
+    <text x="70" y="208" font-size="12" font-weight="600" fill="#0f172a">bool.must</text>
+    <text x="70" y="224" font-size="11.5" fill="#64748b">match { text: "보안을 끄는" }</text>
+    <text x="70" y="240" font-size="11.5" fill="#64748b">q 비면 match_all (핸들러가 차단)</text>
+
+    <rect x="344" y="188" width="272" height="58" rx="10" fill="#ffffff" stroke="#059669" stroke-width="1.6"/>
+    <text x="358" y="208" font-size="12" font-weight="600" fill="#0f172a">bool.filter</text>
+    <text x="358" y="224" font-size="11.5" fill="#64748b">term workspace/team/project</text>
+    <text x="358" y="240" font-size="11.5" fill="#64748b">range occurred_at · terms kind</text>
+
+    <rect x="632" y="188" width="272" height="58" rx="10" fill="#ffffff" stroke="#059669" stroke-width="1.6"/>
+    <text x="646" y="208" font-size="12" font-weight="600" fill="#0f172a">size 20 · sort · highlight</text>
+    <text x="646" y="224" font-size="11.5" fill="#64748b">_score ↓, occurred_at ↓, id ↓</text>
+    <text x="646" y="240" font-size="11.5" fill="#64748b">highlight text: 150자 × 2조각</text>
+
+    <path d="M480 262 L480 294" stroke="#94a3b8" stroke-width="1.6" fill="none" marker-end="url(#arrow)"/>
+    <text x="40" y="284" font-size="11.5" fill="#64748b">질의문과 색인 본문이 같은 analyzer를 통과한다 — 형태소는 여기서 만난다</text>
+
+    <rect x="40" y="300" width="420" height="232" rx="10" fill="#ecfdf5" stroke="#059669" stroke-width="1.6"/>
+    <text x="56" y="322" font-size="13" font-weight="600" fill="#0f172a">① 질의 문자열 — query-time 분석</text>
+    <rect x="56" y="332" width="200" height="28" rx="8" fill="#ffffff" stroke="#059669" stroke-width="1.6"/>
+    <text x="156" y="351" font-size="12.5" fill="#0f172a" text-anchor="middle">보안을 끄는</text>
+    <text x="56" y="380" font-size="11.5" fill="#64748b">nori_tokenizer · decompound_mode=mixed</text>
+
+    <rect x="56" y="388" width="76" height="34" rx="8" fill="#ffffff" stroke="#059669" stroke-width="1.6"/>
+    <text x="94" y="404" font-size="11.5" fill="#0f172a" text-anchor="middle">보안</text>
+    <text x="94" y="417" font-size="9.5" fill="#64748b" text-anchor="middle">NNG</text>
+    <rect x="142" y="388" width="76" height="34" rx="8" fill="#ffffff" stroke="#059669" stroke-width="1.6"/>
+    <text x="180" y="404" font-size="11.5" fill="#0f172a" text-anchor="middle">을</text>
+    <text x="180" y="417" font-size="9.5" fill="#64748b" text-anchor="middle">J</text>
+    <rect x="228" y="388" width="76" height="34" rx="8" fill="#ffffff" stroke="#059669" stroke-width="1.6"/>
+    <text x="266" y="404" font-size="11.5" fill="#0f172a" text-anchor="middle">끄</text>
+    <text x="266" y="417" font-size="9.5" fill="#64748b" text-anchor="middle">VV</text>
+    <rect x="314" y="388" width="76" height="34" rx="8" fill="#ffffff" stroke="#059669" stroke-width="1.6"/>
+    <text x="352" y="404" font-size="11.5" fill="#0f172a" text-anchor="middle">는</text>
+    <text x="352" y="417" font-size="9.5" fill="#64748b" text-anchor="middle">E</text>
+
+    <text x="56" y="440" font-size="11.5" fill="#64748b">korean_pos stoptags — J(조사)·E(어미) 탈락, NNG·VV 잔존</text>
+    <text x="56" y="458" font-size="11.5" fill="#64748b">→ nori_readingform(한자→한글) + lowercase</text>
+    <text x="56" y="476" font-size="11.5" fill="#64748b">인덱스·질의 양쪽에 같은 analyzer가 적용된다</text>
+
+    <rect x="56" y="486" width="100" height="32" rx="8" fill="#d1fae5" stroke="#059669" stroke-width="1.6"/>
+    <text x="106" y="507" font-size="12.5" fill="#0f172a" text-anchor="middle">보안</text>
+    <rect x="168" y="486" width="100" height="32" rx="8" fill="#d1fae5" stroke="#059669" stroke-width="1.6"/>
+    <text x="218" y="507" font-size="12.5" fill="#0f172a" text-anchor="middle">끄</text>
+
+    <rect x="500" y="300" width="420" height="232" rx="10" fill="#ecfdf5" stroke="#059669" stroke-width="1.6"/>
+    <text x="516" y="322" font-size="13" font-weight="600" fill="#0f172a">② 색인된 episode / document_chunk 본문</text>
+    <rect x="516" y="332" width="260" height="28" rx="8" fill="#ffffff" stroke="#059669" stroke-width="1.6"/>
+    <text x="646" y="351" font-size="12.5" fill="#0f172a" text-anchor="middle">보안을 끄고 배포했다</text>
+    <text x="516" y="380" font-size="11.5" fill="#64748b">IndexRecords → _bulk?refresh=true (즉시 검색 가능)</text>
+
+    <rect x="516" y="388" width="42" height="34" rx="8" fill="#ffffff" stroke="#059669" stroke-width="1.6"/>
+    <text x="537" y="404" font-size="11" fill="#0f172a" text-anchor="middle">보안</text>
+    <text x="537" y="417" font-size="9" fill="#64748b" text-anchor="middle">NNG</text>
+    <rect x="565" y="388" width="42" height="34" rx="8" fill="#ffffff" stroke="#059669" stroke-width="1.6"/>
+    <text x="586" y="404" font-size="11" fill="#0f172a" text-anchor="middle">을</text>
+    <text x="586" y="417" font-size="9" fill="#64748b" text-anchor="middle">J</text>
+    <rect x="614" y="388" width="42" height="34" rx="8" fill="#ffffff" stroke="#059669" stroke-width="1.6"/>
+    <text x="635" y="404" font-size="11" fill="#0f172a" text-anchor="middle">끄</text>
+    <text x="635" y="417" font-size="9" fill="#64748b" text-anchor="middle">VV</text>
+    <rect x="663" y="388" width="42" height="34" rx="8" fill="#ffffff" stroke="#059669" stroke-width="1.6"/>
+    <text x="684" y="404" font-size="11" fill="#0f172a" text-anchor="middle">고</text>
+    <text x="684" y="417" font-size="9" fill="#64748b" text-anchor="middle">E</text>
+    <rect x="712" y="388" width="42" height="34" rx="8" fill="#ffffff" stroke="#059669" stroke-width="1.6"/>
+    <text x="733" y="404" font-size="11" fill="#0f172a" text-anchor="middle">배포</text>
+    <text x="733" y="417" font-size="9" fill="#64748b" text-anchor="middle">NNG</text>
+    <rect x="761" y="388" width="42" height="34" rx="8" fill="#ffffff" stroke="#059669" stroke-width="1.6"/>
+    <text x="782" y="404" font-size="11" fill="#0f172a" text-anchor="middle">하</text>
+    <text x="782" y="417" font-size="9" fill="#64748b" text-anchor="middle">XSV</text>
+    <rect x="810" y="388" width="42" height="34" rx="8" fill="#ffffff" stroke="#059669" stroke-width="1.6"/>
+    <text x="831" y="404" font-size="11" fill="#0f172a" text-anchor="middle">았</text>
+    <text x="831" y="417" font-size="9" fill="#64748b" text-anchor="middle">E</text>
+    <rect x="859" y="388" width="42" height="34" rx="8" fill="#ffffff" stroke="#059669" stroke-width="1.6"/>
+    <text x="880" y="404" font-size="11" fill="#0f172a" text-anchor="middle">다</text>
+    <text x="880" y="417" font-size="9" fill="#64748b" text-anchor="middle">E</text>
+
+    <text x="516" y="440" font-size="11.5" fill="#64748b">같은 stoptags — J·E·XSV 탈락(을, 고, 하, 았, 다)</text>
+    <text x="516" y="458" font-size="11.5" fill="#64748b">text 필드만 analyzer=korean · 그 외는 keyword</text>
+    <text x="516" y="476" font-size="11.5" fill="#64748b">mappings.dynamic = strict (미지 필드 색인 거부)</text>
+
+    <rect x="516" y="486" width="100" height="32" rx="8" fill="#d1fae5" stroke="#059669" stroke-width="1.6"/>
+    <text x="566" y="507" font-size="12.5" fill="#0f172a" text-anchor="middle">보안</text>
+    <rect x="628" y="486" width="100" height="32" rx="8" fill="#d1fae5" stroke="#059669" stroke-width="1.6"/>
+    <text x="678" y="507" font-size="12.5" fill="#0f172a" text-anchor="middle">끄</text>
+    <rect x="740" y="486" width="100" height="32" rx="8" fill="#d1fae5" stroke="#059669" stroke-width="1.6"/>
+    <text x="790" y="507" font-size="12.5" fill="#0f172a" text-anchor="middle">배포</text>
+
+    <path d="M162 520 L162 544 L360 544 L360 562" stroke="#94a3b8" stroke-width="1.6" fill="none" marker-end="url(#arrow)"/>
+    <path d="M678 520 L678 544 L600 544 L600 562" stroke="#94a3b8" stroke-width="1.6" fill="none" marker-end="url(#arrow)"/>
+
+    <rect x="300" y="566" width="360" height="54" rx="10" fill="#ecfdf5" stroke="#059669" stroke-width="1.6"/>
+    <text x="480" y="590" font-size="13" font-weight="600" fill="#0f172a" text-anchor="middle">공통 토큰 { 보안, 끄 } → match 성립</text>
+    <text x="480" y="608" font-size="11.5" fill="#64748b" text-anchor="middle">v1의 trigram/LIKE 근사 없이 형태소 수준에서 일치</text>
+
+    <path d="M480 620 L480 634" stroke="#94a3b8" stroke-width="1.6" fill="none"/>
+    <path d="M250 634 L710 634" stroke="#94a3b8" stroke-width="1.6" fill="none"/>
+    <path d="M250 634 L250 648" stroke="#94a3b8" stroke-width="1.6" stroke-dasharray="5 4" fill="none" marker-end="url(#arrow)"/>
+    <path d="M710 634 L710 648" stroke="#94a3b8" stroke-width="1.6" fill="none" marker-end="url(#arrow)"/>
+
+    <rect x="40" y="652" width="420" height="100" rx="10" fill="#eef2ff" stroke="#4f46e5" stroke-width="1.6"/>
+    <text x="56" y="676" font-size="13" font-weight="600" fill="#0f172a">hot 정본 recall 갱신 (best-effort)</text>
+    <text x="56" y="696" font-size="11.5" fill="#64748b">Store.UpdateEpisodes(ids): recall_count++</text>
+    <text x="56" y="714" font-size="11.5" fill="#64748b">last_recalled = RFC3339 UTC</text>
+    <text x="56" y="738" font-size="11.5" fill="#64748b">실패해도 200 — 검색 결과는 이미 정확하다</text>
+
+    <rect x="500" y="652" width="420" height="100" rx="10" fill="#f1f5f9" stroke="#475569" stroke-width="1.6"/>
+    <text x="516" y="676" font-size="13" font-weight="600" fill="#0f172a">200 {success, data: []search.Hit}</text>
+    <text x="516" y="696" font-size="11.5" fill="#64748b">Hit{ record(메타), score, excerpt }</text>
+    <rect x="516" y="706" width="388" height="38" rx="8" fill="#fee2e2" stroke="#dc2626" stroke-width="1.6"/>
+    <text x="530" y="722" font-size="11.5" fill="#0f172a">record.text = "" — 본문 전문 주입 금지</text>
+    <text x="530" y="736" font-size="10" fill="#64748b">발췌는 highlight 조각, 없으면 앞 200 rune</text>
+
+    <rect x="40" y="766" width="14" height="14" rx="4" fill="#f1f5f9" stroke="#475569" stroke-width="1.6"/>
+    <text x="60" y="777" font-size="11.5" fill="#64748b">HTTP·서버 계층</text>
+    <rect x="200" y="766" width="14" height="14" rx="4" fill="#ecfdf5" stroke="#059669" stroke-width="1.6"/>
+    <text x="220" y="777" font-size="11.5" fill="#64748b">episodic / OpenSearch</text>
+    <rect x="400" y="766" width="14" height="14" rx="4" fill="#eef2ff" stroke="#4f46e5" stroke-width="1.6"/>
+    <text x="420" y="777" font-size="11.5" fill="#64748b">hot 정본 JSON</text>
+    <rect x="560" y="766" width="14" height="14" rx="4" fill="#fee2e2" stroke="#dc2626" stroke-width="1.6"/>
+    <text x="580" y="777" font-size="11.5" fill="#64748b">금지되는 것</text>
+    <path d="M700 773 L740 773" stroke="#94a3b8" stroke-width="1.6" stroke-dasharray="5 4" fill="none" marker-end="url(#arrow)"/>
+    <text x="748" y="777" font-size="11.5" fill="#64748b">점선 = best-effort(실패 허용)</text>
+  </g>
+</svg>

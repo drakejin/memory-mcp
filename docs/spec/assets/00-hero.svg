@@ -1,0 +1,81 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 512" width="960" height="512" role="img" aria-labelledby="heroTitle heroDesc">
+  <title id="heroTitle">memory-mcp 시스템 개요</title>
+  <desc id="heroDesc">go-chi HTTP 서버 아래에 비영속 파생 저장소(OpenSearch, Neo4j), 정본인 로컬 hot JSON 저장소, 그리고 S3 cold 계층이 놓인 3계층 구조</desc>
+
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#94a3b8"/>
+    </marker>
+    <marker id="arrowSolid" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#4f46e5"/>
+    </marker>
+  </defs>
+
+  <rect width="960" height="512" fill="#fbfcfe" rx="14"/>
+
+  <!-- server bar -->
+  <rect x="40" y="34" width="880" height="62" rx="10" fill="#eef2ff" stroke="#4f46e5" stroke-width="1.6"/>
+  <text x="64" y="60" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#0f172a">memory-mcp · go-chi HTTP</text>
+  <text x="64" y="80" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12.5" fill="#64748b">127.0.0.1:8420 · Swagger UI /swagger/index.html · 로컬 전용, 인증 없음</text>
+  <text x="896" y="70" text-anchor="end" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12.5" fill="#4f46e5" font-weight="600">make start</text>
+
+  <!-- derived tier -->
+  <text x="40" y="132" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#64748b">파생 — 볼륨 없는 도커 컨테이너. 언제든 죽어도 되고, hot에서 다시 만들어진다</text>
+
+  <rect x="40" y="144" width="390" height="82" rx="10" fill="#ecfdf5" stroke="#059669" stroke-width="1.6"/>
+  <text x="62" y="172" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#0f172a">OpenSearch — episodic</text>
+  <text x="62" y="193" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12.5" fill="#334155">nori 형태소 한국어 전문검색</text>
+  <text x="62" y="212" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#64748b">"그때 무슨 일이 있었나" · 시간 범위 필터</text>
+
+  <rect x="530" y="144" width="390" height="82" rx="10" fill="#fef3c7" stroke="#d97706" stroke-width="1.6"/>
+  <text x="552" y="172" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#0f172a">Neo4j — knowledge</text>
+  <text x="552" y="193" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12.5" fill="#334155">개체·사실·관계 그래프 순회</text>
+  <text x="552" y="212" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#64748b">"지금 무엇이 참인가" · supersede 체인</text>
+
+  <!-- hot tier -->
+  <rect x="40" y="270" width="880" height="108" rx="10" fill="#eef2ff" stroke="#4f46e5" stroke-width="1.6"/>
+  <text x="62" y="298" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#0f172a">hot — 정본 (source of truth)</text>
+  <text x="896" y="298" text-anchor="end" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12.5" fill="#64748b">~/.local/dj-memory</text>
+
+  <rect x="62" y="312" width="268" height="48" rx="8" fill="#ffffff" stroke="#c7d2fe" stroke-width="1.4"/>
+  <text x="78" y="332" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11.5" fill="#0f172a">episodic/{ws}/{team}/{proj}.json</text>
+  <text x="78" y="350" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#64748b">append 지향 사건 기록</text>
+
+  <rect x="346" y="312" width="268" height="48" rx="8" fill="#ffffff" stroke="#c7d2fe" stroke-width="1.4"/>
+  <text x="362" y="332" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11.5" fill="#0f172a">knowledge/{ws}/{team}/{proj}.json</text>
+  <text x="362" y="350" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#64748b">영구 노드 + 엣지</text>
+
+  <rect x="630" y="312" width="268" height="48" rx="8" fill="#ffffff" stroke="#c7d2fe" stroke-width="1.4"/>
+  <text x="646" y="332" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11.5" fill="#0f172a">blobs/{sha256} · manifest.json</text>
+  <text x="646" y="350" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#64748b">원본 캐시 · 인덱스 신선도</text>
+
+  <!-- cold tier -->
+  <rect x="40" y="420" width="880" height="66" rx="10" fill="#f1f5f9" stroke="#475569" stroke-width="1.6"/>
+  <text x="62" y="447" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#0f172a">cold — S3</text>
+  <text x="150" y="447" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="12" fill="#334155">s3://vms-memory-mcp/{username}/</text>
+  <text x="62" y="468" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#64748b">통합된 오래된 episode 배치 · knowledge 스냅샷 · blob 원본 — versioning이 purge의 백스톱</text>
+
+  <!-- arrows: server <-> hot (authoritative) -->
+  <line x1="480" y1="96" x2="480" y2="270" stroke="#4f46e5" stroke-width="1.8" marker-end="url(#arrowSolid)"/>
+  <rect x="392" y="168" width="176" height="34" rx="7" fill="#fbfcfe" stroke="#c7d2fe" stroke-width="1.2"/>
+  <text x="480" y="184" text-anchor="middle" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12" font-weight="600" fill="#4f46e5">쓰기는 항상 정본 먼저</text>
+  <text x="480" y="197" text-anchor="middle" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11" fill="#64748b">원자 temp+rename</text>
+
+  <!-- arrows: hot -> derived (index / rehydrate) -->
+  <path d="M 200 270 L 200 226" stroke="#94a3b8" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+  <text x="210" y="252" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#64748b">색인 · 재수화</text>
+
+  <path d="M 760 270 L 760 226" stroke="#94a3b8" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+  <text x="770" y="252" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#64748b">MERGE 멱등 upsert</text>
+
+  <!-- arrows: derived -> server (query results) -->
+  <path d="M 100 144 L 100 96" stroke="#94a3b8" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+  <text x="110" y="126" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#64748b">검색 결과 — 발췌만</text>
+
+  <path d="M 860 144 L 860 96" stroke="#94a3b8" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+  <text x="850" y="126" text-anchor="end" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#64748b">그래프 순회 결과</text>
+
+  <!-- arrow: hot -> cold -->
+  <line x1="480" y1="378" x2="480" y2="420" stroke="#475569" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <text x="492" y="404" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#64748b">consolidation — 통합된 것만 가라앉는다</text>
+</svg>

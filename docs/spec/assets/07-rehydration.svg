@@ -1,0 +1,169 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 562" width="960" role="img" aria-labelledby="t d">
+  <title id="t">재수화와 degraded 모드 타임라인</title>
+  <desc id="d">hot JSON 정본 레인은 끊기지 않고, OpenSearch와 Neo4j 레인만 컨테이너 소멸 구간에서 사라진다. 파생 저장소가 죽은 동안 쓰기는 201에 degraded 노트를 붙여 성공하고 검색 읽기는 503을 반환한다. 컨테이너가 빈 상태로 돌아오면 /v1/status가 드리프트를 보고하고 /v1/reindex가 episodic은 drop 후 bulk, knowledge는 Clear 후 MERGE로 재수화해 등가를 회복한다.</desc>
+
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#94a3b8"/>
+    </marker>
+  </defs>
+
+  <rect width="960" height="562" fill="#fbfcfe" rx="14"/>
+
+  <text x="24" y="34" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#0f172a">재수화와 degraded 모드 — 컨테이너는 언제든 죽는다</text>
+  <text x="24" y="54" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#64748b">hot JSON은 정본이라 쓰기가 끊기지 않고, 파생 저장소는 manifest 대조로 다시 수렴한다</text>
+
+  <!-- phase chips -->
+  <g font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#0f172a" text-anchor="middle">
+    <rect x="170" y="68" width="139" height="24" rx="10" fill="#ffffff" stroke="#94a3b8" stroke-width="1.6"/>
+    <text x="239" y="84">① 정상</text>
+    <rect x="315" y="68" width="249" height="24" rx="10" fill="#ffffff" stroke="#94a3b8" stroke-width="1.6"/>
+    <text x="439" y="84">② 파생 저장소 다운 — degraded</text>
+    <rect x="570" y="68" width="189" height="24" rx="10" fill="#ffffff" stroke="#94a3b8" stroke-width="1.6"/>
+    <text x="664" y="84">③ 복귀 · 드리프트</text>
+    <rect x="765" y="68" width="165" height="24" rx="10" fill="#ffffff" stroke="#94a3b8" stroke-width="1.6"/>
+    <text x="847" y="84">④ 재수화 · 등가 회복</text>
+  </g>
+
+  <!-- time guides (behind the lanes) -->
+  <g stroke="#94a3b8" stroke-width="1" stroke-dasharray="5 4">
+    <line x1="315" y1="98" x2="315" y2="248"/>
+    <line x1="442" y1="98" x2="442" y2="248"/>
+    <line x1="570" y1="98" x2="570" y2="248"/>
+    <line x1="668" y1="98" x2="668" y2="248"/>
+    <line x1="765" y1="98" x2="765" y2="248"/>
+  </g>
+
+  <!-- hot feeds both derived planes -->
+  <g stroke="#94a3b8" stroke-width="1.6" stroke-dasharray="5 4" fill="none">
+    <path d="M 156 138 L 156 221"/>
+    <path d="M 156 171 L 166 171" marker-end="url(#arrow)"/>
+    <path d="M 156 221 L 166 221" marker-end="url(#arrow)"/>
+  </g>
+
+  <!-- lane labels -->
+  <g font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="end">
+    <text x="140" y="117" font-size="13" font-weight="600" fill="#0f172a">hot JSON (정본)</text>
+    <text x="140" y="132" font-size="11.5" fill="#64748b">~/.local/dj-memory</text>
+    <text x="140" y="167" font-size="13" font-weight="600" fill="#0f172a">episodic</text>
+    <text x="140" y="182" font-size="11.5" fill="#64748b">OpenSearch</text>
+    <text x="140" y="217" font-size="13" font-weight="600" fill="#0f172a">knowledge</text>
+    <text x="140" y="232" font-size="11.5" fill="#64748b">Neo4j</text>
+  </g>
+
+  <!-- lane A: hot -->
+  <rect x="170" y="104" width="760" height="34" rx="10" fill="#eef2ff" stroke="#4f46e5" stroke-width="1.6"/>
+  <text x="550" y="126" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="13" fill="#0f172a" text-anchor="middle">쓰기는 한 번도 끊기지 않는다 — temp+rename 원자 쓰기로 항상 성공</text>
+
+  <!-- lane B: episodic -->
+  <g font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#0f172a" text-anchor="middle">
+    <rect x="170" y="154" width="139" height="34" rx="10" fill="#ecfdf5" stroke="#059669" stroke-width="1.6"/>
+    <text x="239" y="176">색인 동기</text>
+    <rect x="315" y="154" width="249" height="34" rx="10" fill="#fee2e2" stroke="#dc2626" stroke-width="1.6"/>
+    <text x="439" y="176">컨테이너 소멸 — 볼륨 없음</text>
+    <rect x="570" y="154" width="189" height="34" rx="10" fill="#ffffff" stroke="#059669" stroke-width="1.6" stroke-dasharray="5 4"/>
+    <text x="664" y="176">빈 인덱스 · doc 0</text>
+    <rect x="765" y="154" width="165" height="34" rx="10" fill="#ecfdf5" stroke="#059669" stroke-width="1.6"/>
+    <text x="847" y="176">drop + bulk 재색인</text>
+  </g>
+
+  <!-- lane C: knowledge -->
+  <g font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#0f172a" text-anchor="middle">
+    <rect x="170" y="204" width="139" height="34" rx="10" fill="#fef3c7" stroke="#d97706" stroke-width="1.6"/>
+    <text x="239" y="226">그래프 동기</text>
+    <rect x="315" y="204" width="249" height="34" rx="10" fill="#fee2e2" stroke="#dc2626" stroke-width="1.6"/>
+    <text x="439" y="226">컨테이너 소멸 — 볼륨 없음</text>
+    <rect x="570" y="204" width="189" height="34" rx="10" fill="#ffffff" stroke="#d97706" stroke-width="1.6" stroke-dasharray="5 4"/>
+    <text x="664" y="226">빈 그래프 · node 0</text>
+    <rect x="765" y="204" width="165" height="34" rx="10" fill="#fef3c7" stroke="#d97706" stroke-width="1.6"/>
+    <text x="847" y="226">Clear + MERGE 재생</text>
+  </g>
+
+  <!-- event markers -->
+  <g fill="#fbfcfe" stroke="#64748b" stroke-width="1.6">
+    <circle cx="315" cy="252" r="3.5"/>
+    <circle cx="442" cy="252" r="3.5"/>
+    <circle cx="570" cy="252" r="3.5"/>
+    <circle cx="668" cy="252" r="3.5"/>
+    <circle cx="765" cy="252" r="3.5"/>
+  </g>
+  <g font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" text-anchor="middle">
+    <text x="315" y="272" font-weight="600" fill="#0f172a">컨테이너 사망</text>
+    <text x="315" y="287" fill="#64748b">docker stop</text>
+    <text x="442" y="272" font-weight="600" fill="#0f172a">hot 쓰기 계속</text>
+    <text x="442" y="287" fill="#64748b">201 + degraded</text>
+    <text x="570" y="272" font-weight="600" fill="#0f172a">컨테이너 복귀</text>
+    <text x="570" y="287" fill="#64748b">데이터 zero</text>
+    <text x="668" y="272" font-weight="600" fill="#0f172a">drift 감지</text>
+    <text x="668" y="287" fill="#64748b">/v1/status</text>
+    <text x="765" y="272" font-weight="600" fill="#0f172a">재수화</text>
+    <text x="765" y="287" fill="#64748b">/v1/reindex</text>
+  </g>
+
+  <!-- response strip -->
+  <text x="24" y="316" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="13" font-weight="600" fill="#0f172a">요청은 어떻게 응답되는가 — degraded는 에러가 아니다</text>
+
+  <g font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">
+    <rect x="170" y="326" width="139" height="98" rx="10" fill="#f1f5f9" stroke="#475569" stroke-width="1.6"/>
+    <text x="182" y="348" font-size="13" font-weight="600" fill="#0f172a">① 정상</text>
+    <text x="182" y="368" font-size="11.5" fill="#0f172a">쓰기 201</text>
+    <text x="182" y="384" font-size="11.5" fill="#0f172a">검색 200</text>
+    <text x="182" y="400" font-size="11.5" fill="#64748b">degraded 없음</text>
+
+    <rect x="315" y="326" width="249" height="98" rx="10" fill="#fee2e2" stroke="#dc2626" stroke-width="1.6"/>
+    <text x="327" y="348" font-size="13" font-weight="600" fill="#0f172a">② 파생 다운</text>
+    <text x="327" y="368" font-size="11.5" fill="#0f172a">POST /episodes → 201</text>
+    <text x="327" y="384" font-size="11.5" fill="#0f172a">degraded: [search unavailable]</text>
+    <text x="327" y="400" font-size="11.5" fill="#0f172a">GET /episodes/search → 503</text>
+    <text x="327" y="416" font-size="11.5" fill="#64748b">manifest dirty 마크</text>
+
+    <rect x="570" y="326" width="189" height="98" rx="10" fill="#f1f5f9" stroke="#475569" stroke-width="1.6"/>
+    <text x="582" y="348" font-size="13" font-weight="600" fill="#0f172a">③ 복귀 직후</text>
+    <text x="582" y="368" font-size="11.5" fill="#0f172a">/status → drift detected</text>
+    <text x="582" y="384" font-size="11.5" fill="#0f172a">검색 200 · 0건</text>
+    <text x="582" y="400" font-size="11.5" fill="#0f172a">stat-gate는 안 걷힌다</text>
+    <text x="582" y="416" font-size="11.5" fill="#64748b">빈 인덱스 = 조용한 공백</text>
+
+    <rect x="765" y="326" width="165" height="98" rx="10" fill="#eef2ff" stroke="#4f46e5" stroke-width="1.6"/>
+    <text x="777" y="348" font-size="13" font-weight="600" fill="#0f172a">④ 재수화 완료</text>
+    <text x="777" y="368" font-size="11.5" fill="#0f172a">episodic: drop+bulk</text>
+    <text x="777" y="384" font-size="11.5" fill="#0f172a">knowledge: Clear+MERGE</text>
+    <text x="777" y="400" font-size="11.5" fill="#0f172a">drift clean · dirty 0</text>
+    <text x="777" y="416" font-size="11.5" fill="#64748b">검색·순회 결과 동일</text>
+  </g>
+
+  <!-- drift criteria -->
+  <text x="24" y="452" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="13" font-weight="600" fill="#0f172a">drift 판정 — CheckDrift가 보는 것: 내용이 아니라 카운트 · dirty · 해시</text>
+
+  <g font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5">
+    <rect x="24" y="462" width="222" height="48" rx="10" fill="#ecfdf5" stroke="#059669" stroke-width="1.6"/>
+    <text x="36" y="482" font-weight="600" fill="#0f172a">doc / node count ≠ manifest</text>
+    <text x="36" y="498" fill="#64748b">indexed docs != records</text>
+
+    <rect x="258" y="462" width="222" height="48" rx="10" fill="#f1f5f9" stroke="#475569" stroke-width="1.6"/>
+    <text x="270" y="482" font-weight="600" fill="#0f172a">dirty 파일 &gt; 0</text>
+    <text x="270" y="498" fill="#64748b">best-effort upsert 실패 흔적</text>
+
+    <rect x="492" y="462" width="222" height="48" rx="10" fill="#eef2ff" stroke="#4f46e5" stroke-width="1.6"/>
+    <text x="504" y="482" font-weight="600" fill="#0f172a">plane sha ≠ last_hydrated_sha</text>
+    <text x="504" y="498" fill="#64748b">카운트 같아도 내용 변화 포착</text>
+
+    <rect x="726" y="462" width="210" height="48" rx="10" fill="#fee2e2" stroke="#dc2626" stroke-width="1.6"/>
+    <text x="738" y="482" font-weight="600" fill="#0f172a">Ping 실패 → unavailable</text>
+    <text x="738" y="498" fill="#64748b">드리프트 아님 — 저하일 뿐</text>
+  </g>
+
+  <!-- legend -->
+  <g font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#64748b">
+    <rect x="24" y="528" width="12" height="12" rx="3" fill="#eef2ff" stroke="#4f46e5" stroke-width="1.6"/>
+    <text x="42" y="538">hot 정본</text>
+    <rect x="140" y="528" width="12" height="12" rx="3" fill="#ecfdf5" stroke="#059669" stroke-width="1.6"/>
+    <text x="158" y="538">episodic / OpenSearch</text>
+    <rect x="330" y="528" width="12" height="12" rx="3" fill="#fef3c7" stroke="#d97706" stroke-width="1.6"/>
+    <text x="348" y="538">knowledge / Neo4j</text>
+    <rect x="490" y="528" width="12" height="12" rx="3" fill="#fee2e2" stroke="#dc2626" stroke-width="1.6"/>
+    <text x="508" y="538">다운 · 실패</text>
+    <rect x="610" y="528" width="12" height="12" rx="3" fill="#f1f5f9" stroke="#475569" stroke-width="1.6"/>
+    <text x="628" y="538">중립 · 상태</text>
+  </g>
+</svg>

@@ -1,0 +1,142 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 760" width="960" role="img" aria-labelledby="t d">
+  <title id="t">메모리 생명주기 — knowledge 상태기계와 episodic hot→cold 에이징</title>
+  <desc id="d">위쪽은 knowledge 노드의 active·archived·deprecated 상태기계와 purge 게이트, 아래쪽은 episodic 레코드가 ingest에서 S3 cold 배치까지 가라앉는 타임라인. 빨간 X는 코드가 막는 전이(deprecated에서 archived로 되돌리기, 미통합 레코드의 자동 이동)를 뜻한다.</desc>
+
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#94a3b8"/>
+    </marker>
+    <marker id="arrow-danger" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#dc2626"/>
+    </marker>
+  </defs>
+
+  <rect width="960" height="760" fill="#fbfcfe" rx="14"/>
+
+  <g font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">
+
+    <text x="32" y="36" font-size="15" font-weight="600" fill="#0f172a">메모리 생명주기 — knowledge 상태기계와 episodic hot→cold 에이징</text>
+    <text x="32" y="56" font-size="11.5" fill="#64748b">코드 기준: internal/knowledge · internal/consolidate · internal/config</text>
+
+    <!-- ============ Panel A : knowledge state machine ============ -->
+    <rect x="24" y="72" width="912" height="224" rx="12" fill="#ffffff" stroke="#e2e8f0" stroke-width="1.6"/>
+    <text x="44" y="96" font-size="13" font-weight="600" fill="#0f172a">knowledge — 영구 보존, 삭제 대신 상태 전이</text>
+    <text x="44" y="113" font-size="11.5" fill="#64748b">internal/knowledge/knowledge.go · PATCH .../knowledge/nodes/{id}</text>
+
+    <!-- revive bus: archived / deprecated -> active -->
+    <path d="M376 164 V146 M612 164 V146 M612 146 H144" fill="none" stroke="#94a3b8" stroke-width="1.6"/>
+    <path d="M144 146 V162" fill="none" stroke="#94a3b8" stroke-width="1.6" marker-end="url(#arrow)"/>
+    <text x="330" y="138" font-size="11.5" fill="#64748b" text-anchor="middle">set_state=active (부활) · superseded_by 초기화</text>
+
+    <!-- states -->
+    <rect x="56" y="164" width="168" height="52" rx="10" fill="#fef3c7" stroke="#d97706" stroke-width="1.6"/>
+    <text x="140" y="187" font-size="13" font-weight="600" fill="#0f172a" text-anchor="middle">active</text>
+    <text x="140" y="204" font-size="11.5" fill="#64748b" text-anchor="middle">생성 기본값</text>
+
+    <rect x="292" y="164" width="168" height="52" rx="10" fill="#fef3c7" stroke="#d97706" stroke-width="1.6"/>
+    <text x="376" y="187" font-size="13" font-weight="600" fill="#0f172a" text-anchor="middle">archived</text>
+    <text x="376" y="204" font-size="11.5" fill="#64748b" text-anchor="middle">supersede 패자</text>
+
+    <rect x="528" y="164" width="168" height="52" rx="10" fill="#fef3c7" stroke="#d97706" stroke-width="1.6"/>
+    <text x="612" y="187" font-size="13" font-weight="600" fill="#0f172a" text-anchor="middle">deprecated</text>
+    <text x="612" y="204" font-size="11.5" fill="#64748b" text-anchor="middle">reason 필수</text>
+
+    <rect x="752" y="164" width="168" height="52" rx="10" fill="#fee2e2" stroke="#dc2626" stroke-width="1.6"/>
+    <text x="836" y="187" font-size="13" font-weight="600" fill="#0f172a" text-anchor="middle">purge</text>
+    <text x="836" y="204" font-size="11.5" fill="#64748b" text-anchor="middle">confirm=true 필수</text>
+
+    <!-- forward transitions -->
+    <line x1="226" y1="190" x2="288" y2="190" stroke="#94a3b8" stroke-width="1.6" marker-end="url(#arrow)"/>
+    <text x="257" y="181" font-size="11.5" fill="#64748b" text-anchor="middle">supersede</text>
+
+    <line x1="462" y1="190" x2="524" y2="190" stroke="#94a3b8" stroke-width="1.6" marker-end="url(#arrow)"/>
+    <text x="493" y="181" font-size="11.5" fill="#64748b" text-anchor="middle">deprecate</text>
+
+    <line x1="698" y1="190" x2="748" y2="190" stroke="#dc2626" stroke-width="1.6" marker-end="url(#arrow-danger)"/>
+    <text x="723" y="181" font-size="11.5" fill="#dc2626" text-anchor="middle">purge</text>
+
+    <!-- forbidden: deprecated -> archived -->
+    <path d="M660 216 V244 H340 V222" fill="none" stroke="#dc2626" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#arrow-danger)"/>
+    <line x1="493" y1="237" x2="507" y2="251" stroke="#dc2626" stroke-width="2.2"/>
+    <line x1="507" y1="237" x2="493" y2="251" stroke="#dc2626" stroke-width="2.2"/>
+    <text x="500" y="266" font-size="11.5" fill="#dc2626" text-anchor="middle">deprecated → archived 전이 불가</text>
+
+    <text x="836" y="236" font-size="11.5" fill="#64748b" text-anchor="middle">S3 versioning이 백스톱</text>
+    <text x="836" y="252" font-size="11.5" fill="#dc2626" text-anchor="middle">코드상 active에서도 purge 허용</text>
+
+    <!-- ============ Panel B : episodic aging ============ -->
+    <rect x="24" y="308" width="912" height="408" rx="12" fill="#ffffff" stroke="#e2e8f0" stroke-width="1.6"/>
+    <text x="44" y="334" font-size="13" font-weight="600" fill="#0f172a">episodic — append-only · consolidation 실행 시에만 cold로 이동</text>
+    <text x="44" y="352" font-size="11.5" fill="#64748b">internal/consolidate/consolidate.go — AgeEligible() · ageProject() · POST /v1/consolidate</text>
+
+    <rect x="44" y="376" width="190" height="48" rx="10" fill="#eef2ff" stroke="#4f46e5" stroke-width="1.6"/>
+    <text x="139" y="398" font-size="13" font-weight="600" fill="#0f172a" text-anchor="middle">POST .../episodes</text>
+    <text x="139" y="415" font-size="11.5" fill="#64748b" text-anchor="middle">consolidated=false 고정</text>
+
+    <rect x="282" y="376" width="214" height="48" rx="10" fill="#eef2ff" stroke="#4f46e5" stroke-width="1.6"/>
+    <text x="389" y="398" font-size="13" font-weight="600" fill="#0f172a" text-anchor="middle">hot JSON — 정본</text>
+    <text x="389" y="415" font-size="11.5" fill="#64748b" text-anchor="middle">episodic/{ws}/{team}/{proj}.json</text>
+
+    <rect x="544" y="376" width="200" height="48" rx="10" fill="#ecfdf5" stroke="#059669" stroke-width="1.6"/>
+    <text x="644" y="398" font-size="13" font-weight="600" fill="#0f172a" text-anchor="middle">OpenSearch 색인</text>
+    <text x="644" y="415" font-size="11.5" fill="#64748b" text-anchor="middle">파생 · best-effort</text>
+
+    <line x1="236" y1="400" x2="278" y2="400" stroke="#94a3b8" stroke-width="1.6" marker-end="url(#arrow)"/>
+    <line x1="498" y1="400" x2="540" y2="400" stroke="#94a3b8" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+    <text x="519" y="392" font-size="11.5" fill="#64748b" text-anchor="middle">색인</text>
+
+    <line x1="389" y1="426" x2="389" y2="448" stroke="#94a3b8" stroke-width="1.6" marker-end="url(#arrow)"/>
+
+    <rect x="282" y="452" width="214" height="48" rx="10" fill="#fef3c7" stroke="#d97706" stroke-width="1.6"/>
+    <text x="389" y="474" font-size="13" font-weight="600" fill="#0f172a" text-anchor="middle">에이전트 증류</text>
+    <text x="389" y="491" font-size="11.5" fill="#64748b" text-anchor="middle">consolidated=true 표시</text>
+
+    <text x="516" y="470" font-size="11.5" fill="#dc2626">서버는 요약하지 않는다 — consolidated=true를</text>
+    <text x="516" y="486" font-size="11.5" fill="#dc2626">세팅하는 HTTP 엔드포인트가 없다</text>
+
+    <line x1="389" y1="502" x2="389" y2="526" stroke="#94a3b8" stroke-width="1.6" marker-end="url(#arrow)"/>
+
+    <rect x="44" y="530" width="400" height="76" rx="10" fill="#eef2ff" stroke="#4f46e5" stroke-width="1.6"/>
+    <text x="60" y="554" font-size="13" font-weight="600" fill="#0f172a">AgeEligible — 이동 자격 판정</text>
+    <text x="60" y="574" font-size="11.5" fill="#64748b">TTL: consolidated=true AND occurred_at ≤ now − 30일</text>
+    <text x="60" y="592" font-size="11.5" fill="#64748b">압박: 5 MiB 또는 5,000건 초과 → 오래된 consolidated부터</text>
+
+    <line x1="446" y1="568" x2="516" y2="568" stroke="#94a3b8" stroke-width="1.6" marker-end="url(#arrow)"/>
+    <text x="481" y="560" font-size="11.5" fill="#64748b" text-anchor="middle">자격 id</text>
+
+    <rect x="520" y="530" width="416" height="76" rx="10" fill="#f1f5f9" stroke="#475569" stroke-width="1.6"/>
+    <text x="536" y="554" font-size="13" font-weight="600" fill="#0f172a">이동 순서 — 역전 금지</text>
+    <text x="536" y="574" font-size="11.5" fill="#64748b">1 S3 put 확인 → 2 hot 삭제 → 3 인덱스 삭제</text>
+    <text x="536" y="592" font-size="11.5" fill="#64748b">1 실패 = 아무것도 안 지움 · 3 실패 = dirty 마크</text>
+
+    <line x1="728" y1="608" x2="728" y2="632" stroke="#94a3b8" stroke-width="1.6" marker-end="url(#arrow)"/>
+
+    <rect x="44" y="630" width="400" height="68" rx="10" fill="#fee2e2" stroke="#dc2626" stroke-width="1.6"/>
+    <text x="60" y="652" font-size="13" font-weight="600" fill="#0f172a">미통합 — consolidated=false</text>
+    <text x="60" y="670" font-size="11.5" fill="#64748b">나이·압박과 무관하게 hot에 영구 잔존</text>
+    <text x="60" y="688" font-size="11.5" fill="#64748b">/status의 stale_unconsolidated로 계속 노출</text>
+
+    <rect x="520" y="636" width="416" height="48" rx="10" fill="#f1f5f9" stroke="#475569" stroke-width="1.6"/>
+    <text x="728" y="658" font-size="13" font-weight="600" fill="#0f172a" text-anchor="middle">cold — S3 월별 배치 {yyyy-mm}.json</text>
+    <text x="728" y="675" font-size="11.5" fill="#64748b" text-anchor="middle">download-merge-upload · id 기준 멱등</text>
+
+    <line x1="446" y1="660" x2="516" y2="660" stroke="#dc2626" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#arrow-danger)"/>
+    <line x1="474" y1="653" x2="488" y2="667" stroke="#dc2626" stroke-width="2.2"/>
+    <line x1="488" y1="653" x2="474" y2="667" stroke="#dc2626" stroke-width="2.2"/>
+
+    <!-- ============ legend ============ -->
+    <rect x="32" y="731" width="12" height="12" rx="3" fill="#eef2ff" stroke="#4f46e5" stroke-width="1.6"/>
+    <text x="50" y="741" font-size="11.5" fill="#64748b">hot 정본</text>
+    <rect x="130" y="731" width="12" height="12" rx="3" fill="#ecfdf5" stroke="#059669" stroke-width="1.6"/>
+    <text x="148" y="741" font-size="11.5" fill="#64748b">OpenSearch 파생</text>
+    <rect x="266" y="731" width="12" height="12" rx="3" fill="#fef3c7" stroke="#d97706" stroke-width="1.6"/>
+    <text x="284" y="741" font-size="11.5" fill="#64748b">knowledge / Neo4j</text>
+    <rect x="410" y="731" width="12" height="12" rx="3" fill="#f1f5f9" stroke="#475569" stroke-width="1.6"/>
+    <text x="428" y="741" font-size="11.5" fill="#64748b">cold S3</text>
+    <rect x="498" y="731" width="12" height="12" rx="3" fill="#fee2e2" stroke="#dc2626" stroke-width="1.6"/>
+    <text x="516" y="741" font-size="11.5" fill="#64748b">금지 · purge</text>
+    <line x1="612" y1="737" x2="646" y2="737" stroke="#94a3b8" stroke-width="1.6" stroke-dasharray="5 4"/>
+    <text x="654" y="741" font-size="11.5" fill="#64748b">점선 = 파생 · best-effort</text>
+
+  </g>
+</svg>

@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 562" width="960" role="img" aria-labelledby="t d">
   <title id="t">재수화와 degraded 모드 타임라인</title>
-  <desc id="d">hot JSON 정본 레인은 끊기지 않고, OpenSearch와 Neo4j 레인만 컨테이너 소멸 구간에서 사라진다. 파생 저장소가 죽은 동안 쓰기는 201에 degraded 노트를 붙여 성공하고 검색 읽기는 503을 반환한다. 컨테이너가 빈 상태로 돌아오면 /v1/status가 드리프트를 보고하고 /v1/reindex가 episodic은 drop 후 bulk, knowledge는 Clear 후 MERGE로 재수화해 등가를 회복한다.</desc>
+  <desc id="d">hot JSON 정본 레인은 끊기지 않고, OpenSearch와 Neo4j 레인만 컨테이너 소멸 구간에서 사라진다. 파생 저장소가 죽은 동안 쓰기는 201에 degraded 노트를 붙여 성공하고 검색 읽기는 503을 반환한다. 컨테이너가 빈 상태로 돌아와도 인덱스 부재는 조용한 0건이 아니라 503으로 보고되고, 요청 진입 stat-gate가 파생 결손을 직접 감지해 해당 프로젝트를 부분 재수화한다. /v1/status가 드리프트를 보고하고 /v1/reindex가 episodic은 drop 후 bulk, knowledge는 Clear 후 MERGE로 재수화해 등가를 회복한다.</desc>
 
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
@@ -120,9 +120,9 @@
     <rect x="570" y="326" width="189" height="98" rx="10" fill="#f1f5f9" stroke="#475569" stroke-width="1.6"/>
     <text x="582" y="348" font-size="13" font-weight="600" fill="#0f172a">③ 복귀 직후</text>
     <text x="582" y="368" font-size="11.5" fill="#0f172a">/status → drift detected</text>
-    <text x="582" y="384" font-size="11.5" fill="#0f172a">검색 200 · 0건</text>
-    <text x="582" y="400" font-size="11.5" fill="#0f172a">stat-gate는 안 걷힌다</text>
-    <text x="582" y="416" font-size="11.5" fill="#64748b">빈 인덱스 = 조용한 공백</text>
+    <text x="582" y="384" font-size="11.5" fill="#0f172a">검색 → 503 (indexAbsent)</text>
+    <text x="582" y="400" font-size="11.5" fill="#0f172a">stat-gate가 결손을 감지</text>
+    <text x="582" y="416" font-size="11.5" fill="#64748b">조용한 0건 공백은 닫혔다</text>
 
     <rect x="765" y="326" width="165" height="98" rx="10" fill="#eef2ff" stroke="#4f46e5" stroke-width="1.6"/>
     <text x="777" y="348" font-size="13" font-weight="600" fill="#0f172a">④ 재수화 완료</text>

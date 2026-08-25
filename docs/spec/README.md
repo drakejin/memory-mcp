@@ -16,8 +16,8 @@
 | 06 | [문서](06-documents.md) | 업로드 1건 → blob + `document` 노드 + N개 `document_chunk` 분해, 청크에서 원본 바이트로 되짚는 경로 |
 | 07 | [재수화와 degraded](07-rehydration.md) | 볼륨 없는 파생 컨테이너, manifest 드리프트 판정, 파생물이 죽어도 쓰기를 성공시키는 규칙 |
 | 08 | [HTTP API](08-http-api.md) | 루프백 전용 go-chi 라우트 16개와 `{success, data, error}` 봉투, swaggo 생성물 |
-| 09 | [코드 구조](09-code-structure.md) | `internal/` 13개 패키지의 단일 책임·의존 방향, 에러가 HTTP로 번역되는 단일 지점 |
-| 10 | [운영](10-operations.md) | `make start` 15개 타깃, env 9개, 포트·자격증명과 실패 시 실제로 보이는 문자열 |
+| 09 | [코드 구조](09-code-structure.md) | `internal/` 15개 패키지의 단일 책임·의존 방향, 도메인 `errs.Kind`가 HTTP로 번역되는 단일 지점 |
+| 10 | [운영](10-operations.md) | `make start` 17개 타깃, env 9개, 포트·자격증명과 실패 시 실제로 보이는 문자열 |
 | 11 | [검증](11-testing.md) | fake 주입 단위 층 · 옵트인 라이브 계약 층 · 블랙박스 8단계 수용 기준의 권한 분리 |
 
 ## 읽는 순서
@@ -38,11 +38,12 @@
 
 | 규칙 | 소유 문서 |
 |---|---|
-| 에이징 자격 판정(TTL·압박·미통합 불변식) `AgeEligible` | [03 §3.2](03-lifecycle.md) |
+| 에이징 자격 판정(TTL·압박·미통합 불변식) `ageEligible` | [03 §3.2](03-lifecycle.md) |
 | knowledge 상태 전이와 purge 게이트 | [03](03-lifecycle.md) |
 | hot/cold 키 형식과 `manifest.json` 스키마 | [02](02-storage-model.md) |
 | 드리프트 판정과 degraded 응답 규칙 | [07](07-rehydration.md) |
-| 응답 봉투·상태코드·요청 크기 한계 | [08](08-http-api.md) |
+| 응답 봉투·요청 크기 한계, `errs.Kind` → HTTP 상태 매핑표 | [08](08-http-api.md) |
+| 2계층 에러 설계에서 **어느 패키지가 어떤 Kind를 생산하는가** | [09 §5.4](09-code-structure.md) |
 | env 변수와 기동 순서 | [10](10-operations.md) |
 | 청킹·추출 한계(`DocumentChunkBytes`, `MaxDocumentChunks`) | [06](06-documents.md) |
 

@@ -10,7 +10,7 @@
   <g font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">
 
     <text x="40" y="34" font-size="15" font-weight="600" fill="#0f172a">Episodic 검색 경로 — HTTP 질의에서 nori 형태소 매칭까지</text>
-    <text x="40" y="52" font-size="11.5" fill="#64748b">internal/server/handlers_episodic.go → internal/search/client.go → OpenSearch 인덱스 dj-memory-episodic</text>
+    <text x="40" y="52" font-size="11.5" fill="#64748b">internal/server/handlers_episodic.go → internal/search/{query,bulk}.go → OpenSearch 인덱스 dj-memory-episodic</text>
 
     <rect x="40" y="68" width="880" height="58" rx="10" fill="#f1f5f9" stroke="#475569" stroke-width="1.6"/>
     <text x="56" y="92" font-size="13" fill="#0f172a">GET /v1/{ws}/{team}/{proj}/episodes/search?q=보안을 끄는&amp;from=…&amp;to=…&amp;kinds=event,decision</text>
@@ -122,10 +122,10 @@
     <path d="M710 634 L710 648" stroke="#94a3b8" stroke-width="1.6" fill="none" marker-end="url(#arrow)"/>
 
     <rect x="40" y="652" width="420" height="100" rx="10" fill="#eef2ff" stroke="#4f46e5" stroke-width="1.6"/>
-    <text x="56" y="676" font-size="13" font-weight="600" fill="#0f172a">hot 정본 recall 갱신 (best-effort)</text>
-    <text x="56" y="696" font-size="11.5" fill="#64748b">Store.UpdateEpisodes(ids): recall_count++</text>
-    <text x="56" y="714" font-size="11.5" fill="#64748b">last_recalled = RFC3339 UTC</text>
-    <text x="56" y="738" font-size="11.5" fill="#64748b">실패해도 200 — 검색 결과는 이미 정확하다</text>
+    <text x="56" y="675" font-size="13" font-weight="600" fill="#0f172a">hot 정본 recall 갱신 (best-effort)</text>
+    <text x="56" y="695" font-size="11.5" fill="#64748b">UpdateEpisodes(ids): recall_count++ · last_recalled</text>
+    <text x="56" y="712" font-size="11.5" fill="#64748b">convergeEpisodes → IndexRecords(변경분) + markIndexed</text>
+    <text x="56" y="729" font-size="11.5" fill="#64748b">실패 시 markDirty — 응답은 그대로 200</text>
 
     <rect x="500" y="652" width="420" height="100" rx="10" fill="#f1f5f9" stroke="#475569" stroke-width="1.6"/>
     <text x="516" y="676" font-size="13" font-weight="600" fill="#0f172a">200 {success, data: []search.Hit}</text>

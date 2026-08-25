@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 650" width="960" height="650" role="img" aria-labelledby="t d">
   <title id="t">문서 ingest 파이프라인과 세 산출물</title>
-  <desc id="d">업로드된 파일이 sha256 계산, cold-first blob 업로드, 결정적 텍스트 추출, 2 KiB 청킹, knowledge 문서 노드 생성의 5단계를 거쳐 blob, document_chunk 레코드들, document 노드 세 산출물로 갈라지고 각각 S3 cold, hot episodic JSON + OpenSearch, hot knowledge JSON + Neo4j로 흘러가는 구조. 아래쪽에 청크 히트에서 원본 바이트까지의 회수 경로가 있다.</desc>
+  <desc id="d">업로드된 파일이 sha256 계산, cold-first blob 업로드, 결정적 텍스트 추출, 2 KiB 청킹, knowledge 문서 노드 생성의 5단계를 거쳐 blob, document_chunk 레코드들, document 노드 세 산출물로 갈라지고 각각 S3 cold, hot episodic JSON + OpenSearch, hot knowledge JSON + Neo4j로 흘러가는 구조. 파생 저장소 upsert는 best-effort라 실패하면 manifest dirty 마크와 응답의 degraded 노트로 보고된다. 아래쪽에 청크 히트에서 원본 바이트까지의 회수 경로가 있다.</desc>
 
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
@@ -28,7 +28,7 @@
     <!-- pipeline stage 1: sha256 -->
     <rect x="40" y="112" width="158" height="90" rx="10" fill="#ffffff" stroke="#c7d2fe" stroke-width="1.6"/>
     <text x="56" y="136" font-size="15" font-weight="600" fill="#0f172a">① sha256</text>
-    <text x="56" y="157" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11.5" fill="#334155">blob.Cache.Put</text>
+    <text x="56" y="157" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11.5" fill="#334155">blob.Client.Put</text>
     <text x="56" y="175" font-size="11.5" fill="#64748b">temp+rename 쓰기</text>
     <text x="56" y="192" font-size="11.5" fill="#64748b">동일 sha면 no-op</text>
 
@@ -46,7 +46,7 @@
     <!-- pipeline stage 3: extraction -->
     <rect x="401" y="112" width="158" height="90" rx="10" fill="#ffffff" stroke="#c7d2fe" stroke-width="1.6"/>
     <text x="417" y="136" font-size="15" font-weight="600" fill="#0f172a">③ 텍스트 추출</text>
-    <text x="417" y="157" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11.5" fill="#334155">DefaultExtractor</text>
+    <text x="417" y="157" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11.5" fill="#334155">textExtractor</text>
     <text x="417" y="175" font-size="11.5" fill="#64748b">PDF · md · txt</text>
     <text x="417" y="192" font-size="11.5" fill="#64748b">불가 → 건너뛰고 보고</text>
 
@@ -55,8 +55,8 @@
     <!-- pipeline stage 4: chunking -->
     <rect x="581" y="112" width="158" height="90" rx="10" fill="#ecfdf5" stroke="#059669" stroke-width="1.6"/>
     <text x="597" y="136" font-size="15" font-weight="600" fill="#0f172a">④ 청킹</text>
-    <text x="597" y="157" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11.5" fill="#334155">Chunk(2048, 500)</text>
-    <text x="597" y="175" font-size="11.5" fill="#64748b">룬 경계 유지</text>
+    <text x="597" y="157" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11.5" fill="#334155">chunkDocument()</text>
+    <text x="597" y="175" font-size="11.5" fill="#64748b">2048 B · 룬 경계 유지</text>
     <text x="597" y="192" font-size="11.5" fill="#64748b">상한 초과분 잘림</text>
 
     <line x1="741" y1="157" x2="760" y2="157" stroke="#4f46e5" stroke-width="1.6" marker-end="url(#arrowSolid)"/>
@@ -106,7 +106,7 @@
     <rect x="640" y="346" width="280" height="68" rx="10" fill="#eef2ff" stroke="#4f46e5" stroke-width="1.6"/>
     <text x="658" y="370" font-size="13" font-weight="600" fill="#0f172a">hot — knowledge JSON · 정본</text>
     <text x="658" y="389" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11.5" fill="#334155">knowledge/{ws}/{team}/{proj}.json</text>
-    <text x="658" y="406" font-size="11.5" fill="#64748b">WriteKnowledge · 전체 치환</text>
+    <text x="658" y="406" font-size="11.5" fill="#64748b">UpdateKnowledge · 읽기·쓰기 한 락</text>
 
     <line x1="180" y1="414" x2="180" y2="446" stroke="#94a3b8" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
     <line x1="480" y1="414" x2="480" y2="446" stroke="#94a3b8" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
@@ -124,12 +124,12 @@
     <rect x="340" y="448" width="280" height="64" rx="10" fill="#ecfdf5" stroke="#059669" stroke-width="1.6"/>
     <text x="358" y="471" font-size="13" font-weight="600" fill="#0f172a">OpenSearch — episodic</text>
     <text x="358" y="489" font-size="11.5" fill="#334155">IndexRecords · nori 색인</text>
-    <text x="358" y="505" font-size="11.5" fill="#64748b">실패 → manifest dirty</text>
+    <text x="358" y="505" font-size="11.5" fill="#64748b">실패 → dirty + degraded 노트</text>
 
     <rect x="640" y="448" width="280" height="64" rx="10" fill="#fef3c7" stroke="#d97706" stroke-width="1.6"/>
     <text x="658" y="471" font-size="13" font-weight="600" fill="#0f172a">Neo4j — knowledge</text>
     <text x="658" y="489" font-size="11.5" fill="#334155">UpsertNodes · MERGE</text>
-    <text x="658" y="505" font-size="11.5" fill="#64748b">실패 → manifest dirty</text>
+    <text x="658" y="505" font-size="11.5" fill="#64748b">실패 → dirty + degraded 노트</text>
 
     <!-- retrieval strip -->
     <text x="40" y="536" font-size="11.5" fill="#64748b">회수 — 청크 히트에서 원본 바이트까지</text>

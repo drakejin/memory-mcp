@@ -113,7 +113,7 @@ definitions:
       total:
         type: integer
     type: object
-  episodic.Actor:
+  episode.Actor:
     enum:
     - agent
     - user
@@ -123,7 +123,26 @@ definitions:
     - ActorAgent
     - ActorUser
     - ActorSystem
-  episodic.Kind:
+  episode.AppendResult:
+    properties:
+      degraded:
+        items:
+          type: string
+        type: array
+      record:
+        $ref: '#/definitions/episode.Record'
+    type: object
+  episode.Hit:
+    properties:
+      excerpt:
+        description: Excerpt is a highlighted fragment of Text, not the full body.
+        type: string
+      record:
+        $ref: '#/definitions/episode.Record'
+      score:
+        type: number
+    type: object
+  episode.Kind:
     enum:
     - event
     - conversation
@@ -137,11 +156,11 @@ definitions:
     - KindDecision
     - KindObservation
     - KindDocumentChunk
-  episodic.Record:
+  episode.Record:
     properties:
       actor:
         allOf:
-        - $ref: '#/definitions/episodic.Actor'
+        - $ref: '#/definitions/episode.Actor'
         description: Actor is agent|user|system.
       consolidated:
         description: |-
@@ -161,7 +180,7 @@ definitions:
         type: string
       kind:
         allOf:
-        - $ref: '#/definitions/episodic.Kind'
+        - $ref: '#/definitions/episode.Kind'
         description: Kind is one of the values accepted by ValidKind.
       last_recalled:
         type: string
@@ -175,18 +194,125 @@ definitions:
         type: integer
       refs:
         allOf:
-        - $ref: '#/definitions/episodic.Refs'
+        - $ref: '#/definitions/episode.Refs'
         description: Refs is set only for kind=document_chunk.
       text:
         description: Text is the body — the nori full-text indexing target.
         type: string
     type: object
-  episodic.Refs:
+  episode.Refs:
     properties:
       chunk_seq:
         type: integer
       doc_sha:
         type: string
+    type: object
+  httpserver.ConsolidateRequest:
+    properties:
+      dry_run:
+        type: boolean
+      projects:
+        description: Projects limits the run to "ws/team/proj" strings; empty = all.
+        items:
+          type: string
+        type: array
+    type: object
+  httpserver.CreateEpisodeRequest:
+    properties:
+      actor:
+        $ref: '#/definitions/episode.Actor'
+      entities:
+        items:
+          type: string
+        type: array
+      kind:
+        $ref: '#/definitions/episode.Kind'
+      occurred_at:
+        type: string
+      refs:
+        $ref: '#/definitions/episode.Refs'
+      text:
+        type: string
+    type: object
+  httpserver.Envelope:
+    properties:
+      data: {}
+      error:
+        $ref: '#/definitions/apierr.Error'
+      success:
+        type: boolean
+    type: object
+  httpserver.S3SyncStatus:
+    properties:
+      bucket:
+        type: string
+      last_archive_at:
+        type: string
+      last_snapshot_at:
+        type: string
+      reachable:
+        type: boolean
+    type: object
+  httpserver.StatusReport:
+    properties:
+      degraded:
+        description: Degraded lists currently unavailable derived services.
+        items:
+          type: string
+        type: array
+      dirty_files:
+        description: |-
+          DirtyFiles lists hot files whose derived upsert failed and awaits
+          rehydration.
+        items:
+          type: string
+        type: array
+      drift:
+        allOf:
+        - $ref: '#/definitions/rehydrate.DriftReport'
+        description: Drift is the live manifest-vs-derived comparison.
+      manifest_updated_at:
+        description: ManifestUpdatedAt is the manifest's own freshness timestamp.
+        type: string
+      s3:
+        allOf:
+        - $ref: '#/definitions/httpserver.S3SyncStatus'
+        description: |-
+          S3 reports cold-store reachability and last successful archive/snapshot
+          activity.
+      stale_unconsolidated:
+        type: integer
+      unconsolidated:
+        description: |-
+          Unconsolidated counts episodes not yet distilled; StaleUnconsolidated
+          counts those older than the TTL that still refuse to age (§3.1 —
+          surfaced forever, never auto-deleted).
+        type: integer
+    type: object
+  knowledge.CreateNodeInput:
+    properties:
+      aliases:
+        items:
+          type: string
+        type: array
+      body:
+        type: string
+      kind:
+        $ref: '#/definitions/knowledge.NodeKind'
+      name:
+        type: string
+      provenance:
+        items:
+          type: string
+        type: array
+      review_after:
+        type: string
+      supersedes:
+        items:
+          type: string
+        type: array
+      trust:
+        $ref: '#/definitions/knowledge.Trust'
     type: object
   knowledge.Edge:
     properties:
@@ -202,6 +328,15 @@ definitions:
         $ref: '#/definitions/knowledge.Rel'
       to:
         type: string
+    type: object
+  knowledge.EdgeResult:
+    properties:
+      degraded:
+        items:
+          type: string
+        type: array
+      edge:
+        $ref: '#/definitions/knowledge.Edge'
     type: object
   knowledge.Graph:
     properties:
@@ -274,6 +409,35 @@ definitions:
     - KindLesson
     - KindPreference
     - KindDocument
+  knowledge.NodeResult:
+    properties:
+      degraded:
+        items:
+          type: string
+        type: array
+      node:
+        $ref: '#/definitions/knowledge.Node'
+    type: object
+  knowledge.PatchNodeInput:
+    properties:
+      op:
+        type: string
+      reason:
+        type: string
+      state:
+        $ref: '#/definitions/knowledge.State'
+    type: object
+  knowledge.PurgeResult:
+    properties:
+      degraded:
+        items:
+          type: string
+        type: array
+      purged_id:
+        type: string
+      removed_edges:
+        type: integer
+    type: object
   knowledge.Rel:
     enum:
     - relates_to
@@ -349,170 +513,6 @@ definitions:
         description: Verified is set when verify=true ran a full hash audit (§5 reindex).
         type: boolean
     type: object
-  search.Hit:
-    properties:
-      excerpt:
-        description: Excerpt is a highlighted fragment of Text, not the full body.
-        type: string
-      record:
-        $ref: '#/definitions/episodic.Record'
-      score:
-        type: number
-    type: object
-  server.ConsolidateRequest:
-    properties:
-      dry_run:
-        type: boolean
-      projects:
-        description: Projects limits the run to "ws/team/proj" strings; empty = all.
-        items:
-          type: string
-        type: array
-    type: object
-  server.CreateEpisodeRequest:
-    properties:
-      actor:
-        $ref: '#/definitions/episodic.Actor'
-      entities:
-        items:
-          type: string
-        type: array
-      kind:
-        $ref: '#/definitions/episodic.Kind'
-      occurred_at:
-        type: string
-      refs:
-        $ref: '#/definitions/episodic.Refs'
-      text:
-        type: string
-    type: object
-  server.CreateEpisodeResponse:
-    properties:
-      degraded:
-        items:
-          type: string
-        type: array
-      record:
-        $ref: '#/definitions/episodic.Record'
-    type: object
-  server.CreateNodeRequest:
-    properties:
-      aliases:
-        items:
-          type: string
-        type: array
-      body:
-        type: string
-      kind:
-        $ref: '#/definitions/knowledge.NodeKind'
-      name:
-        type: string
-      provenance:
-        items:
-          type: string
-        type: array
-      review_after:
-        type: string
-      supersedes:
-        items:
-          type: string
-        type: array
-      trust:
-        $ref: '#/definitions/knowledge.Trust'
-    type: object
-  server.EdgeResponse:
-    properties:
-      degraded:
-        items:
-          type: string
-        type: array
-      edge:
-        $ref: '#/definitions/knowledge.Edge'
-    type: object
-  server.Envelope:
-    properties:
-      data: {}
-      error:
-        $ref: '#/definitions/apierr.Error'
-      success:
-        type: boolean
-    type: object
-  server.NodeResponse:
-    properties:
-      degraded:
-        items:
-          type: string
-        type: array
-      node:
-        $ref: '#/definitions/knowledge.Node'
-    type: object
-  server.PatchNodeRequest:
-    properties:
-      op:
-        type: string
-      reason:
-        type: string
-      state:
-        $ref: '#/definitions/knowledge.State'
-    type: object
-  server.PurgeNodeResponse:
-    properties:
-      degraded:
-        items:
-          type: string
-        type: array
-      purged_id:
-        type: string
-      removed_edges:
-        type: integer
-    type: object
-  server.S3SyncStatus:
-    properties:
-      bucket:
-        type: string
-      last_archive_at:
-        type: string
-      last_snapshot_at:
-        type: string
-      reachable:
-        type: boolean
-    type: object
-  server.StatusReport:
-    properties:
-      degraded:
-        description: Degraded lists currently unavailable derived services.
-        items:
-          type: string
-        type: array
-      dirty_files:
-        description: |-
-          DirtyFiles lists hot files whose derived upsert failed and awaits
-          rehydration.
-        items:
-          type: string
-        type: array
-      drift:
-        allOf:
-        - $ref: '#/definitions/rehydrate.DriftReport'
-        description: Drift is the live manifest-vs-derived comparison.
-      manifest_updated_at:
-        description: ManifestUpdatedAt is the manifest's own freshness timestamp.
-        type: string
-      s3:
-        allOf:
-        - $ref: '#/definitions/server.S3SyncStatus'
-        description: |-
-          S3 reports cold-store reachability and last successful archive/snapshot
-          activity.
-      stale_unconsolidated:
-        type: integer
-      unconsolidated:
-        description: |-
-          Unconsolidated counts episodes not yet distilled; StaleUnconsolidated
-          counts those older than the TTL that still refuse to age (§3.1 —
-          surfaced forever, never auto-deleted).
-        type: integer
-    type: object
 host: 127.0.0.1:8420
 info:
   contact: {}
@@ -529,7 +529,7 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/server.Envelope'
+            $ref: '#/definitions/httpserver.Envelope'
       summary: Liveness probe
       tags:
       - ops
@@ -565,7 +565,7 @@ paths:
           description: Created
           schema:
             allOf:
-            - $ref: '#/definitions/server.Envelope'
+            - $ref: '#/definitions/httpserver.Envelope'
             - properties:
                 data:
                   $ref: '#/definitions/document.IngestResult'
@@ -573,11 +573,11 @@ paths:
         "400":
           description: Bad Request
           schema:
-            $ref: '#/definitions/server.Envelope'
+            $ref: '#/definitions/httpserver.Envelope'
         "503":
           description: document pipeline unavailable
           schema:
-            $ref: '#/definitions/server.Envelope'
+            $ref: '#/definitions/httpserver.Envelope'
       summary: Ingest a document (multipart) — blob + chunks + document node
       tags:
       - documents
@@ -606,7 +606,7 @@ paths:
         name: body
         required: true
         schema:
-          $ref: '#/definitions/server.CreateEpisodeRequest'
+          $ref: '#/definitions/httpserver.CreateEpisodeRequest'
       produces:
       - application/json
       responses:
@@ -614,19 +614,19 @@ paths:
           description: Created
           schema:
             allOf:
-            - $ref: '#/definitions/server.Envelope'
+            - $ref: '#/definitions/httpserver.Envelope'
             - properties:
                 data:
-                  $ref: '#/definitions/server.CreateEpisodeResponse'
+                  $ref: '#/definitions/episode.AppendResult'
               type: object
         "400":
           description: Bad Request
           schema:
-            $ref: '#/definitions/server.Envelope'
+            $ref: '#/definitions/httpserver.Envelope'
         "500":
           description: Internal Server Error
           schema:
-            $ref: '#/definitions/server.Envelope'
+            $ref: '#/definitions/httpserver.Envelope'
       summary: Append an episodic record (hot write + best-effort index)
       tags:
       - episodic
@@ -660,19 +660,19 @@ paths:
           description: OK
           schema:
             allOf:
-            - $ref: '#/definitions/server.Envelope'
+            - $ref: '#/definitions/httpserver.Envelope'
             - properties:
                 data:
-                  $ref: '#/definitions/episodic.Record'
+                  $ref: '#/definitions/episode.Record'
               type: object
         "400":
           description: Bad Request
           schema:
-            $ref: '#/definitions/server.Envelope'
+            $ref: '#/definitions/httpserver.Envelope'
         "404":
           description: Not Found
           schema:
-            $ref: '#/definitions/server.Envelope'
+            $ref: '#/definitions/httpserver.Envelope'
       summary: Fetch one episode by id (hot first, cold archive fallback)
       tags:
       - episodic
@@ -718,21 +718,21 @@ paths:
           description: OK
           schema:
             allOf:
-            - $ref: '#/definitions/server.Envelope'
+            - $ref: '#/definitions/httpserver.Envelope'
             - properties:
                 data:
                   items:
-                    $ref: '#/definitions/search.Hit'
+                    $ref: '#/definitions/episode.Hit'
                   type: array
               type: object
         "400":
           description: Bad Request
           schema:
-            $ref: '#/definitions/server.Envelope'
+            $ref: '#/definitions/httpserver.Envelope'
         "503":
           description: index unavailable (§5)
           schema:
-            $ref: '#/definitions/server.Envelope'
+            $ref: '#/definitions/httpserver.Envelope'
       summary: Full-text (nori) search over hot episodes
       tags:
       - episodic
@@ -769,19 +769,19 @@ paths:
           description: Created
           schema:
             allOf:
-            - $ref: '#/definitions/server.Envelope'
+            - $ref: '#/definitions/httpserver.Envelope'
             - properties:
                 data:
-                  $ref: '#/definitions/server.EdgeResponse'
+                  $ref: '#/definitions/knowledge.EdgeResult'
               type: object
         "400":
           description: Bad Request
           schema:
-            $ref: '#/definitions/server.Envelope'
+            $ref: '#/definitions/httpserver.Envelope'
         "404":
           description: endpoint node not found
           schema:
-            $ref: '#/definitions/server.Envelope'
+            $ref: '#/definitions/httpserver.Envelope'
       summary: Create a knowledge edge
       tags:
       - knowledge
@@ -819,7 +819,7 @@ paths:
           description: OK
           schema:
             allOf:
-            - $ref: '#/definitions/server.Envelope'
+            - $ref: '#/definitions/httpserver.Envelope'
             - properties:
                 data:
                   $ref: '#/definitions/knowledge.Graph'
@@ -827,11 +827,11 @@ paths:
         "400":
           description: Bad Request
           schema:
-            $ref: '#/definitions/server.Envelope'
+            $ref: '#/definitions/httpserver.Envelope'
         "503":
           description: graph unavailable (§5)
           schema:
-            $ref: '#/definitions/server.Envelope'
+            $ref: '#/definitions/httpserver.Envelope'
       summary: Neighborhood traversal around an entity
       tags:
       - knowledge
@@ -860,7 +860,7 @@ paths:
         name: body
         required: true
         schema:
-          $ref: '#/definitions/server.CreateNodeRequest'
+          $ref: '#/definitions/knowledge.CreateNodeInput'
       produces:
       - application/json
       responses:
@@ -868,19 +868,19 @@ paths:
           description: Created
           schema:
             allOf:
-            - $ref: '#/definitions/server.Envelope'
+            - $ref: '#/definitions/httpserver.Envelope'
             - properties:
                 data:
-                  $ref: '#/definitions/server.NodeResponse'
+                  $ref: '#/definitions/knowledge.NodeResult'
               type: object
         "400":
           description: Bad Request
           schema:
-            $ref: '#/definitions/server.Envelope'
+            $ref: '#/definitions/httpserver.Envelope'
         "404":
           description: superseded node not found
           schema:
-            $ref: '#/definitions/server.Envelope'
+            $ref: '#/definitions/httpserver.Envelope'
       summary: Create a knowledge node (optionally superseding others)
       tags:
       - knowledge
@@ -919,23 +919,23 @@ paths:
           description: OK
           schema:
             allOf:
-            - $ref: '#/definitions/server.Envelope'
+            - $ref: '#/definitions/httpserver.Envelope'
             - properties:
                 data:
-                  $ref: '#/definitions/server.PurgeNodeResponse'
+                  $ref: '#/definitions/knowledge.PurgeResult'
               type: object
         "400":
           description: confirm missing
           schema:
-            $ref: '#/definitions/server.Envelope'
+            $ref: '#/definitions/httpserver.Envelope'
         "404":
           description: Not Found
           schema:
-            $ref: '#/definitions/server.Envelope'
+            $ref: '#/definitions/httpserver.Envelope'
         "409":
           description: node is still active — archive or deprecate it first (§3)
           schema:
-            $ref: '#/definitions/server.Envelope'
+            $ref: '#/definitions/httpserver.Envelope'
       summary: Purge a node from hot (S3 versioning is the backstop)
       tags:
       - knowledge
@@ -968,7 +968,7 @@ paths:
         name: body
         required: true
         schema:
-          $ref: '#/definitions/server.PatchNodeRequest'
+          $ref: '#/definitions/knowledge.PatchNodeInput'
       produces:
       - application/json
       responses:
@@ -976,23 +976,23 @@ paths:
           description: OK
           schema:
             allOf:
-            - $ref: '#/definitions/server.Envelope'
+            - $ref: '#/definitions/httpserver.Envelope'
             - properties:
                 data:
-                  $ref: '#/definitions/server.NodeResponse'
+                  $ref: '#/definitions/knowledge.NodeResult'
               type: object
         "400":
           description: Bad Request
           schema:
-            $ref: '#/definitions/server.Envelope'
+            $ref: '#/definitions/httpserver.Envelope'
         "404":
           description: Not Found
           schema:
-            $ref: '#/definitions/server.Envelope'
+            $ref: '#/definitions/httpserver.Envelope'
         "409":
           description: illegal state transition
           schema:
-            $ref: '#/definitions/server.Envelope'
+            $ref: '#/definitions/httpserver.Envelope'
       summary: Transition node state (set_state / deprecate)
       tags:
       - knowledge
@@ -1030,7 +1030,7 @@ paths:
           description: OK
           schema:
             allOf:
-            - $ref: '#/definitions/server.Envelope'
+            - $ref: '#/definitions/httpserver.Envelope'
             - properties:
                 data:
                   items:
@@ -1040,11 +1040,11 @@ paths:
         "400":
           description: Bad Request
           schema:
-            $ref: '#/definitions/server.Envelope'
+            $ref: '#/definitions/httpserver.Envelope'
         "503":
           description: graph unavailable (§5)
           schema:
-            $ref: '#/definitions/server.Envelope'
+            $ref: '#/definitions/httpserver.Envelope'
       summary: Full-text search over knowledge nodes
       tags:
       - knowledge
@@ -1057,7 +1057,7 @@ paths:
         in: body
         name: body
         schema:
-          $ref: '#/definitions/server.ConsolidateRequest'
+          $ref: '#/definitions/httpserver.ConsolidateRequest'
       produces:
       - application/json
       responses:
@@ -1065,7 +1065,7 @@ paths:
           description: OK
           schema:
             allOf:
-            - $ref: '#/definitions/server.Envelope'
+            - $ref: '#/definitions/httpserver.Envelope'
             - properties:
                 data:
                   $ref: '#/definitions/consolidate.Report'
@@ -1073,11 +1073,11 @@ paths:
         "400":
           description: Bad Request
           schema:
-            $ref: '#/definitions/server.Envelope'
+            $ref: '#/definitions/httpserver.Envelope'
         "503":
           description: Service Unavailable
           schema:
-            $ref: '#/definitions/server.Envelope'
+            $ref: '#/definitions/httpserver.Envelope'
       summary: Run the deterministic consolidation pipeline (§4)
       tags:
       - ops
@@ -1099,11 +1099,11 @@ paths:
         "400":
           description: Bad Request
           schema:
-            $ref: '#/definitions/server.Envelope'
+            $ref: '#/definitions/httpserver.Envelope'
         "404":
           description: Not Found
           schema:
-            $ref: '#/definitions/server.Envelope'
+            $ref: '#/definitions/httpserver.Envelope'
       summary: Download original document bytes by sha256
       tags:
       - documents
@@ -1122,21 +1122,21 @@ paths:
           description: OK
           schema:
             allOf:
-            - $ref: '#/definitions/server.Envelope'
+            - $ref: '#/definitions/httpserver.Envelope'
             - properties:
                 data:
                   items:
-                    $ref: '#/definitions/episodic.Record'
+                    $ref: '#/definitions/episode.Record'
                   type: array
               type: object
         "400":
           description: Bad Request
           schema:
-            $ref: '#/definitions/server.Envelope'
+            $ref: '#/definitions/httpserver.Envelope'
         "404":
           description: Not Found
           schema:
-            $ref: '#/definitions/server.Envelope'
+            $ref: '#/definitions/httpserver.Envelope'
       summary: List document_chunk episodes for a document
       tags:
       - documents
@@ -1154,7 +1154,7 @@ paths:
           description: OK
           schema:
             allOf:
-            - $ref: '#/definitions/server.Envelope'
+            - $ref: '#/definitions/httpserver.Envelope'
             - properties:
                 data:
                   $ref: '#/definitions/rehydrate.Report'
@@ -1162,7 +1162,7 @@ paths:
         "503":
           description: Service Unavailable
           schema:
-            $ref: '#/definitions/server.Envelope'
+            $ref: '#/definitions/httpserver.Envelope'
       summary: Force full rehydration of derived stores (§5)
       tags:
       - ops
@@ -1175,10 +1175,10 @@ paths:
           description: OK
           schema:
             allOf:
-            - $ref: '#/definitions/server.Envelope'
+            - $ref: '#/definitions/httpserver.Envelope'
             - properties:
                 data:
-                  $ref: '#/definitions/server.StatusReport'
+                  $ref: '#/definitions/httpserver.StatusReport'
               type: object
       summary: 'Honest system status: freshness, drift, unconsolidated, S3 sync'
       tags:

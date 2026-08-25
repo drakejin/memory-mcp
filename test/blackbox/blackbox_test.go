@@ -20,14 +20,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/drakejin/memory-mcp/internal/cold"
-	"github.com/drakejin/memory-mcp/internal/consolidate"
-	"github.com/drakejin/memory-mcp/internal/document"
-	"github.com/drakejin/memory-mcp/internal/episodic"
-	"github.com/drakejin/memory-mcp/internal/errs"
-	"github.com/drakejin/memory-mcp/internal/knowledge"
-	"github.com/drakejin/memory-mcp/internal/rehydrate"
-	"github.com/drakejin/memory-mcp/internal/server"
+	"github.com/drakejin/memory-mcp/internal/external/thirdparty/cold"
+	"github.com/drakejin/memory-mcp/internal/handler/app/httpserver"
+	"github.com/drakejin/memory-mcp/internal/service/consolidate"
+	"github.com/drakejin/memory-mcp/internal/service/document"
+	"github.com/drakejin/memory-mcp/internal/service/episode"
+	"github.com/drakejin/memory-mcp/internal/service/knowledge"
+	"github.com/drakejin/memory-mcp/internal/service/rehydrate"
+	"github.com/drakejin/memory-mcp/internal/x/errs"
 	pdffixture "github.com/drakejin/memory-mcp/test/fixtures/pdf"
 )
 
@@ -79,17 +79,17 @@ func TestScenario02_EpisodicNoriSearch(t *testing.T) {
 	requireReady(t)
 
 	for i, text := range koreanEpisodeTexts {
-		status, env := h.postJSON(t, h.projPath()+"/episodes", server.CreateEpisodeRequest{
-			Kind:       episodic.KindEvent,
+		status, env := h.postJSON(t, h.projPath()+"/episodes", httpserver.CreateEpisodeRequest{
+			Kind:       episode.KindEvent,
 			OccurredAt: time.Now().UTC(),
-			Actor:      episodic.ActorAgent,
+			Actor:      episode.ActorAgent,
 			Text:       text,
 			Entities:   []string{"memory-mcp"},
 		})
 		if status != http.StatusCreated || !env.Success {
 			failf(t, "create episode %d: want 201 success, got HTTP %d error=%q", i, status, env.Error)
 		}
-		var resp server.CreateEpisodeResponse
+		var resp episode.AppendResult
 		decodeData(t, env, &resp)
 		if resp.Record.ID == "" {
 			failf(t, "create episode %d: no id assigned", i)
@@ -140,12 +140,12 @@ func TestScenario03_KnowledgeSupersedeChain(t *testing.T) {
 		failf(t, "prerequisite: scenario 2 episodes missing")
 	}
 
-	createNode := func(req server.CreateNodeRequest) knowledge.Node {
+	createNode := func(req knowledge.CreateNodeInput) knowledge.Node {
 		status, env := h.postJSON(t, h.projPath()+"/knowledge/nodes", req)
 		if status != http.StatusCreated || !env.Success {
 			failf(t, "create node %q: want 201 success, got HTTP %d error=%q", req.Name, status, env.Error)
 		}
-		var resp server.NodeResponse
+		var resp knowledge.NodeResult
 		decodeData(t, env, &resp)
 		if resp.Node.ID == "" {
 			failf(t, "create node %q: no id assigned", req.Name)
@@ -156,11 +156,11 @@ func TestScenario03_KnowledgeSupersedeChain(t *testing.T) {
 		return resp.Node
 	}
 
-	f1 := createNode(server.CreateNodeRequest{Kind: knowledge.KindFact, Name: fact1Name, Body: fact1Body,
+	f1 := createNode(knowledge.CreateNodeInput{Kind: knowledge.KindFact, Name: fact1Name, Body: fact1Body,
 		Trust: knowledge.TrustAgentInferred, Provenance: []string{h.epIDs[0]}})
-	f2 := createNode(server.CreateNodeRequest{Kind: knowledge.KindFact, Name: fact2Name, Body: fact2Body,
+	f2 := createNode(knowledge.CreateNodeInput{Kind: knowledge.KindFact, Name: fact2Name, Body: fact2Body,
 		Trust: knowledge.TrustAgentInferred, Provenance: []string{h.epIDs[1]}})
-	f3 := createNode(server.CreateNodeRequest{Kind: knowledge.KindFact, Name: fact3Name, Body: fact3Body,
+	f3 := createNode(knowledge.CreateNodeInput{Kind: knowledge.KindFact, Name: fact3Name, Body: fact3Body,
 		Trust: knowledge.TrustUserStated, Provenance: []string{h.epIDs[0]}, Supersedes: []string{f1.ID}})
 	pass(t, "facts stored: f1=%s f2=%s f3=%s (f3 supersedes f1)", f1.ID, f2.ID, f3.ID)
 
@@ -260,7 +260,7 @@ func TestScenario04_DocumentIngest(t *testing.T) {
 			return false, fmt.Sprintf("search HTTP %d", status)
 		}
 		for _, hit := range hits {
-			if hit.Record.Kind == episodic.KindDocumentChunk && hit.Record.Refs != nil && hit.Record.Refs.DocSHA == res.SHA {
+			if hit.Record.Kind == episode.KindDocumentChunk && hit.Record.Refs != nil && hit.Record.Refs.DocSHA == res.SHA {
 				return true, fmt.Sprintf("chunk hit id=%s seq=%d excerpt=%q", hit.Record.ID, hit.Record.Refs.ChunkSeq, hit.Excerpt)
 			}
 		}
@@ -294,7 +294,7 @@ func TestScenario04_DocumentIngest(t *testing.T) {
 	if ckStatus != http.StatusOK {
 		failf(t, "chunks endpoint: want 200, got %d error=%q", ckStatus, ckEnv.Error)
 	}
-	var chunks []episodic.Record
+	var chunks []episode.Record
 	decodeData(t, ckEnv, &chunks)
 	if len(chunks) != len(res.ChunkIDs) {
 		failf(t, "chunks endpoint: want %d chunks, got %d", len(res.ChunkIDs), len(chunks))
@@ -330,7 +330,7 @@ func TestScenario05_Rehydration(t *testing.T) {
 	if stStatus != http.StatusOK {
 		failf(t, "/status: want 200, got %d error=%q", stStatus, stEnv.Error)
 	}
-	var st server.StatusReport
+	var st httpserver.StatusReport
 	decodeData(t, stEnv, &st)
 	if !st.Drift.Episodic.Detected || !st.Drift.Knowledge.Detected {
 		failf(t, "/status must detect drift on empty derived stores; got episodic=%+v knowledge=%+v", st.Drift.Episodic, st.Drift.Knowledge)
@@ -391,14 +391,14 @@ func TestScenario06_Consolidation(t *testing.T) {
 
 	oldAt := time.Now().UTC().AddDate(0, 0, -40)
 	postAged := func(text string) string {
-		status, env := h.postJSON(t, h.projPath()+"/episodes", server.CreateEpisodeRequest{
-			Kind: episodic.KindEvent, OccurredAt: oldAt, Actor: episodic.ActorAgent,
+		status, env := h.postJSON(t, h.projPath()+"/episodes", httpserver.CreateEpisodeRequest{
+			Kind: episode.KindEvent, OccurredAt: oldAt, Actor: episode.ActorAgent,
 			Text: text, Entities: []string{"consolidation"},
 		})
 		if status != http.StatusCreated {
 			failf(t, "create aged episode: want 201, got %d error=%q", status, env.Error)
 		}
-		var resp server.CreateEpisodeResponse
+		var resp episode.AppendResult
 		decodeData(t, env, &resp)
 		return resp.Record.ID
 	}
@@ -407,7 +407,7 @@ func TestScenario06_Consolidation(t *testing.T) {
 	// Fixture: flip consolidated=true through the canonical store — the
 	// server never auto-consolidates (§0 principle 2), distillation is the
 	// agent's job, and this harness plays the agent.
-	if err := h.store(t).UpdateEpisodes(ctx, hotKey, []string{h.oldID}, func(r episodic.Record) episodic.Record {
+	if err := h.store(t).UpdateEpisodes(ctx, hotKey, []string{h.oldID}, func(r episode.Record) episode.Record {
 		r.Consolidated = true
 		return r
 	}); err != nil {
@@ -419,7 +419,7 @@ func TestScenario06_Consolidation(t *testing.T) {
 	}
 	pass(t, "fixtures ready: aged consolidated %s and stale unconsolidated %s (occurred %s)", h.oldID, h.staleID, oldAt.Format(time.RFC3339))
 
-	cStatus, cEnv := h.postJSON(t, "/v1/consolidate", server.ConsolidateRequest{Projects: []string{hotKey.String()}})
+	cStatus, cEnv := h.postJSON(t, "/v1/consolidate", httpserver.ConsolidateRequest{Projects: []string{hotKey.String()}})
 	if cStatus != http.StatusOK || !cEnv.Success {
 		failf(t, "/consolidate: want 200 success, got %d error=%q", cStatus, cEnv.Error)
 	}
@@ -501,14 +501,14 @@ func TestScenario07_DegradedMode(t *testing.T) {
 	})
 	pass(t, "OpenSearch container stopped; server keeps running host-side")
 
-	status, env := h.postJSON(t, h.projPath()+"/episodes", server.CreateEpisodeRequest{
-		Kind: episodic.KindObservation, OccurredAt: time.Now().UTC(), Actor: episodic.ActorAgent,
+	status, env := h.postJSON(t, h.projPath()+"/episodes", httpserver.CreateEpisodeRequest{
+		Kind: episode.KindObservation, OccurredAt: time.Now().UTC(), Actor: episode.ActorAgent,
 		Text: degradedText, Entities: []string{"degraded"},
 	})
 	if status != http.StatusCreated || !env.Success {
 		failf(t, "write during outage: hot write must succeed with 201 (§5, never 503 on write), got %d error=%q", status, env.Error)
 	}
-	var resp server.CreateEpisodeResponse
+	var resp episode.AppendResult
 	decodeData(t, env, &resp)
 	if len(resp.Degraded) == 0 {
 		failf(t, "write during outage: response must carry a degraded note (§5 honesty), got none")
@@ -558,7 +558,7 @@ func TestScenario08_StatusHonesty(t *testing.T) {
 	if status != http.StatusOK || !env.Success {
 		failf(t, "/status: want 200 success, got %d error=%q", status, env.Error)
 	}
-	var st server.StatusReport
+	var st httpserver.StatusReport
 	decodeData(t, env, &st)
 	t.Logf("status report: %s", env.Data)
 

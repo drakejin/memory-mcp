@@ -27,9 +27,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/drakejin/memory-mcp/internal/graph"
-	"github.com/drakejin/memory-mcp/internal/hotstore"
-	"github.com/drakejin/memory-mcp/internal/search"
+	episodemem "github.com/drakejin/memory-mcp/internal/external/memory/episode"
+	knowledgemem "github.com/drakejin/memory-mcp/internal/external/memory/knowledge"
+	"github.com/drakejin/memory-mcp/internal/external/persistence/hotstore"
+	"github.com/drakejin/memory-mcp/internal/x/projectkey"
 )
 
 // Harness constants. DJ_MEMORY_USERNAME is set to "jin/blackbox-test" so the
@@ -57,7 +58,7 @@ const (
 )
 
 // hotKey addresses the single project every scenario uses.
-var hotKey = hotstore.ProjectKey{Workspace: wsName, Team: teamName, Project: projName}
+var hotKey = projectkey.Key{Workspace: wsName, Team: teamName, Project: projName}
 
 // harness owns process/tooling state shared across the ordered scenarios.
 type harness struct {
@@ -312,8 +313,8 @@ func (h *harness) ensurePortFree(t *testing.T) {
 func (h *harness) startServer(t *testing.T) {
 	t.Helper()
 	h.bin = filepath.Join(h.home, "memory-mcp-blackbox")
-	if out, err := runCmd(h.repoRoot, "go", "build", "-o", h.bin, "./cmd/memory-mcp"); err != nil {
-		failf(t, "go build ./cmd/memory-mcp: %v\n%s", err, out)
+	if out, err := runCmd(h.repoRoot, "go", "build", "-o", h.bin, "./cmd/server/http"); err != nil {
+		failf(t, "go build ./cmd/server/http: %v\n%s", err, out)
 	}
 	h.serverLogPath = filepath.Join(h.home, "server.log")
 	logFile, err := os.Create(h.serverLogPath)
@@ -363,7 +364,7 @@ type envelope struct {
 	Error   *envelopeError  `json:"error"`
 }
 
-// envelopeError mirrors the public projection of internal/server/apierr.Error:
+// envelopeError mirrors the public projection of internal/handler/app/httpserver/apierr.Error:
 // a stable code, a client-safe message and any deliberately published details.
 type envelopeError struct {
 	Code    string         `json:"code"`
@@ -467,20 +468,20 @@ func (h *harness) projPath() string {
 
 // searchEpisodes runs the project-scoped episodic search and decodes hits
 // when the index answered 200.
-func (h *harness) searchEpisodes(t *testing.T, q string) (int, []search.Hit) {
+func (h *harness) searchEpisodes(t *testing.T, q string) (int, []episodemem.Hit) {
 	t.Helper()
 	qs := url.Values{"q": {q}}.Encode()
 	status, env := h.getJSON(t, h.projPath()+"/episodes/search?"+qs)
 	if status != http.StatusOK {
 		return status, nil
 	}
-	var hits []search.Hit
+	var hits []episodemem.Hit
 	decodeData(t, env, &hits)
 	return status, hits
 }
 
 // hitIDs projects hit record ids for evidence lines.
-func hitIDs(hits []search.Hit) []string {
+func hitIDs(hits []episodemem.Hit) []string {
 	ids := make([]string, 0, len(hits))
 	for _, hit := range hits {
 		ids = append(ids, hit.Record.ID)
@@ -513,9 +514,9 @@ func (h *harness) store(t *testing.T) hotstore.Client {
 // graphClient opens a direct Neo4j client — the traversal channel scenarios 3
 // and 5 assert on, independent of the server's own connection. It is closed
 // when the scenario ends so a driver pool never outlives its test.
-func (h *harness) graphClient(t *testing.T) graph.Client {
+func (h *harness) graphClient(t *testing.T) knowledgemem.Client {
 	t.Helper()
-	client, err := graph.New(graph.Config{
+	client, err := knowledgemem.New(knowledgemem.Config{
 		URL:      neo4jBoltURL,
 		User:     neo4jUser,
 		Password: neo4jPassword,

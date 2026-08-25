@@ -28,7 +28,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/server.Envelope"
+                            "$ref": "#/definitions/httpserver.Envelope"
                         }
                     }
                 }
@@ -52,7 +52,7 @@ const docTemplate = `{
                         "name": "body",
                         "in": "body",
                         "schema": {
-                            "$ref": "#/definitions/server.ConsolidateRequest"
+                            "$ref": "#/definitions/httpserver.ConsolidateRequest"
                         }
                     }
                 ],
@@ -62,7 +62,7 @@ const docTemplate = `{
                         "schema": {
                             "allOf": [
                                 {
-                                    "$ref": "#/definitions/server.Envelope"
+                                    "$ref": "#/definitions/httpserver.Envelope"
                                 },
                                 {
                                     "type": "object",
@@ -78,13 +78,13 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/server.Envelope"
+                            "$ref": "#/definitions/httpserver.Envelope"
                         }
                     },
                     "503": {
                         "description": "Service Unavailable",
                         "schema": {
-                            "$ref": "#/definitions/server.Envelope"
+                            "$ref": "#/definitions/httpserver.Envelope"
                         }
                     }
                 }
@@ -118,13 +118,13 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/server.Envelope"
+                            "$ref": "#/definitions/httpserver.Envelope"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/server.Envelope"
+                            "$ref": "#/definitions/httpserver.Envelope"
                         }
                     }
                 }
@@ -154,7 +154,7 @@ const docTemplate = `{
                         "schema": {
                             "allOf": [
                                 {
-                                    "$ref": "#/definitions/server.Envelope"
+                                    "$ref": "#/definitions/httpserver.Envelope"
                                 },
                                 {
                                     "type": "object",
@@ -162,7 +162,7 @@ const docTemplate = `{
                                         "data": {
                                             "type": "array",
                                             "items": {
-                                                "$ref": "#/definitions/episodic.Record"
+                                                "$ref": "#/definitions/episode.Record"
                                             }
                                         }
                                     }
@@ -173,13 +173,13 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/server.Envelope"
+                            "$ref": "#/definitions/httpserver.Envelope"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/server.Envelope"
+                            "$ref": "#/definitions/httpserver.Envelope"
                         }
                     }
                 }
@@ -208,7 +208,7 @@ const docTemplate = `{
                         "schema": {
                             "allOf": [
                                 {
-                                    "$ref": "#/definitions/server.Envelope"
+                                    "$ref": "#/definitions/httpserver.Envelope"
                                 },
                                 {
                                     "type": "object",
@@ -224,7 +224,7 @@ const docTemplate = `{
                     "503": {
                         "description": "Service Unavailable",
                         "schema": {
-                            "$ref": "#/definitions/server.Envelope"
+                            "$ref": "#/definitions/httpserver.Envelope"
                         }
                     }
                 }
@@ -245,13 +245,13 @@ const docTemplate = `{
                         "schema": {
                             "allOf": [
                                 {
-                                    "$ref": "#/definitions/server.Envelope"
+                                    "$ref": "#/definitions/httpserver.Envelope"
                                 },
                                 {
                                     "type": "object",
                                     "properties": {
                                         "data": {
-                                            "$ref": "#/definitions/server.StatusReport"
+                                            "$ref": "#/definitions/httpserver.StatusReport"
                                         }
                                     }
                                 }
@@ -309,7 +309,7 @@ const docTemplate = `{
                         "schema": {
                             "allOf": [
                                 {
-                                    "$ref": "#/definitions/server.Envelope"
+                                    "$ref": "#/definitions/httpserver.Envelope"
                                 },
                                 {
                                     "type": "object",
@@ -325,13 +325,13 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/server.Envelope"
+                            "$ref": "#/definitions/httpserver.Envelope"
                         }
                     },
                     "503": {
                         "description": "document pipeline unavailable",
                         "schema": {
-                            "$ref": "#/definitions/server.Envelope"
+                            "$ref": "#/definitions/httpserver.Envelope"
                         }
                     }
                 }
@@ -377,7 +377,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/server.CreateEpisodeRequest"
+                            "$ref": "#/definitions/httpserver.CreateEpisodeRequest"
                         }
                     }
                 ],
@@ -387,13 +387,13 @@ const docTemplate = `{
                         "schema": {
                             "allOf": [
                                 {
-                                    "$ref": "#/definitions/server.Envelope"
+                                    "$ref": "#/definitions/httpserver.Envelope"
                                 },
                                 {
                                     "type": "object",
                                     "properties": {
                                         "data": {
-                                            "$ref": "#/definitions/server.CreateEpisodeResponse"
+                                            "$ref": "#/definitions/episode.AppendResult"
                                         }
                                     }
                                 }
@@ -403,13 +403,13 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/server.Envelope"
+                            "$ref": "#/definitions/httpserver.Envelope"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/server.Envelope"
+                            "$ref": "#/definitions/httpserver.Envelope"
                         }
                     }
                 }
@@ -478,7 +478,7 @@ const docTemplate = `{
                         "schema": {
                             "allOf": [
                                 {
-                                    "$ref": "#/definitions/server.Envelope"
+                                    "$ref": "#/definitions/httpserver.Envelope"
                                 },
                                 {
                                     "type": "object",
@@ -486,7 +486,7 @@ const docTemplate = `{
                                         "data": {
                                             "type": "array",
                                             "items": {
-                                                "$ref": "#/definitions/search.Hit"
+                                                "$ref": "#/definitions/episode.Hit"
                                             }
                                         }
                                     }
@@ -497,13 +497,13 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/server.Envelope"
+                            "$ref": "#/definitions/httpserver.Envelope"
                         }
                     },
                     "503": {
                         "description": "index unavailable (§5)",
                         "schema": {
-                            "$ref": "#/definitions/server.Envelope"
+                            "$ref": "#/definitions/httpserver.Envelope"
                         }
                     }
                 }
@@ -554,13 +554,13 @@ const docTemplate = `{
                         "schema": {
                             "allOf": [
                                 {
-                                    "$ref": "#/definitions/server.Envelope"
+                                    "$ref": "#/definitions/httpserver.Envelope"
                                 },
                                 {
                                     "type": "object",
                                     "properties": {
                                         "data": {
-                                            "$ref": "#/definitions/episodic.Record"
+                                            "$ref": "#/definitions/episode.Record"
                                         }
                                     }
                                 }
@@ -570,13 +570,13 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/server.Envelope"
+                            "$ref": "#/definitions/httpserver.Envelope"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/server.Envelope"
+                            "$ref": "#/definitions/httpserver.Envelope"
                         }
                     }
                 }
@@ -632,13 +632,13 @@ const docTemplate = `{
                         "schema": {
                             "allOf": [
                                 {
-                                    "$ref": "#/definitions/server.Envelope"
+                                    "$ref": "#/definitions/httpserver.Envelope"
                                 },
                                 {
                                     "type": "object",
                                     "properties": {
                                         "data": {
-                                            "$ref": "#/definitions/server.EdgeResponse"
+                                            "$ref": "#/definitions/knowledge.EdgeResult"
                                         }
                                     }
                                 }
@@ -648,13 +648,13 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/server.Envelope"
+                            "$ref": "#/definitions/httpserver.Envelope"
                         }
                     },
                     "404": {
                         "description": "endpoint node not found",
                         "schema": {
-                            "$ref": "#/definitions/server.Envelope"
+                            "$ref": "#/definitions/httpserver.Envelope"
                         }
                     }
                 }
@@ -711,7 +711,7 @@ const docTemplate = `{
                         "schema": {
                             "allOf": [
                                 {
-                                    "$ref": "#/definitions/server.Envelope"
+                                    "$ref": "#/definitions/httpserver.Envelope"
                                 },
                                 {
                                     "type": "object",
@@ -727,13 +727,13 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/server.Envelope"
+                            "$ref": "#/definitions/httpserver.Envelope"
                         }
                     },
                     "503": {
                         "description": "graph unavailable (§5)",
                         "schema": {
-                            "$ref": "#/definitions/server.Envelope"
+                            "$ref": "#/definitions/httpserver.Envelope"
                         }
                     }
                 }
@@ -779,7 +779,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/server.CreateNodeRequest"
+                            "$ref": "#/definitions/knowledge.CreateNodeInput"
                         }
                     }
                 ],
@@ -789,13 +789,13 @@ const docTemplate = `{
                         "schema": {
                             "allOf": [
                                 {
-                                    "$ref": "#/definitions/server.Envelope"
+                                    "$ref": "#/definitions/httpserver.Envelope"
                                 },
                                 {
                                     "type": "object",
                                     "properties": {
                                         "data": {
-                                            "$ref": "#/definitions/server.NodeResponse"
+                                            "$ref": "#/definitions/knowledge.NodeResult"
                                         }
                                     }
                                 }
@@ -805,13 +805,13 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/server.Envelope"
+                            "$ref": "#/definitions/httpserver.Envelope"
                         }
                     },
                     "404": {
                         "description": "superseded node not found",
                         "schema": {
-                            "$ref": "#/definitions/server.Envelope"
+                            "$ref": "#/definitions/httpserver.Envelope"
                         }
                     }
                 }
@@ -869,13 +869,13 @@ const docTemplate = `{
                         "schema": {
                             "allOf": [
                                 {
-                                    "$ref": "#/definitions/server.Envelope"
+                                    "$ref": "#/definitions/httpserver.Envelope"
                                 },
                                 {
                                     "type": "object",
                                     "properties": {
                                         "data": {
-                                            "$ref": "#/definitions/server.PurgeNodeResponse"
+                                            "$ref": "#/definitions/knowledge.PurgeResult"
                                         }
                                     }
                                 }
@@ -885,19 +885,19 @@ const docTemplate = `{
                     "400": {
                         "description": "confirm missing",
                         "schema": {
-                            "$ref": "#/definitions/server.Envelope"
+                            "$ref": "#/definitions/httpserver.Envelope"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/server.Envelope"
+                            "$ref": "#/definitions/httpserver.Envelope"
                         }
                     },
                     "409": {
                         "description": "node is still active — archive or deprecate it first (§3)",
                         "schema": {
-                            "$ref": "#/definitions/server.Envelope"
+                            "$ref": "#/definitions/httpserver.Envelope"
                         }
                     }
                 }
@@ -948,7 +948,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/server.PatchNodeRequest"
+                            "$ref": "#/definitions/knowledge.PatchNodeInput"
                         }
                     }
                 ],
@@ -958,13 +958,13 @@ const docTemplate = `{
                         "schema": {
                             "allOf": [
                                 {
-                                    "$ref": "#/definitions/server.Envelope"
+                                    "$ref": "#/definitions/httpserver.Envelope"
                                 },
                                 {
                                     "type": "object",
                                     "properties": {
                                         "data": {
-                                            "$ref": "#/definitions/server.NodeResponse"
+                                            "$ref": "#/definitions/knowledge.NodeResult"
                                         }
                                     }
                                 }
@@ -974,19 +974,19 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/server.Envelope"
+                            "$ref": "#/definitions/httpserver.Envelope"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/server.Envelope"
+                            "$ref": "#/definitions/httpserver.Envelope"
                         }
                     },
                     "409": {
                         "description": "illegal state transition",
                         "schema": {
-                            "$ref": "#/definitions/server.Envelope"
+                            "$ref": "#/definitions/httpserver.Envelope"
                         }
                     }
                 }
@@ -1043,7 +1043,7 @@ const docTemplate = `{
                         "schema": {
                             "allOf": [
                                 {
-                                    "$ref": "#/definitions/server.Envelope"
+                                    "$ref": "#/definitions/httpserver.Envelope"
                                 },
                                 {
                                     "type": "object",
@@ -1062,13 +1062,13 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/server.Envelope"
+                            "$ref": "#/definitions/httpserver.Envelope"
                         }
                     },
                     "503": {
                         "description": "graph unavailable (§5)",
                         "schema": {
-                            "$ref": "#/definitions/server.Envelope"
+                            "$ref": "#/definitions/httpserver.Envelope"
                         }
                     }
                 }
@@ -1230,7 +1230,7 @@ const docTemplate = `{
                 }
             }
         },
-        "episodic.Actor": {
+        "episode.Actor": {
             "type": "string",
             "enum": [
                 "agent",
@@ -1243,7 +1243,36 @@ const docTemplate = `{
                 "ActorSystem"
             ]
         },
-        "episodic.Kind": {
+        "episode.AppendResult": {
+            "type": "object",
+            "properties": {
+                "degraded": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "record": {
+                    "$ref": "#/definitions/episode.Record"
+                }
+            }
+        },
+        "episode.Hit": {
+            "type": "object",
+            "properties": {
+                "excerpt": {
+                    "description": "Excerpt is a highlighted fragment of Text, not the full body.",
+                    "type": "string"
+                },
+                "record": {
+                    "$ref": "#/definitions/episode.Record"
+                },
+                "score": {
+                    "type": "number"
+                }
+            }
+        },
+        "episode.Kind": {
             "type": "string",
             "enum": [
                 "event",
@@ -1260,14 +1289,14 @@ const docTemplate = `{
                 "KindDocumentChunk"
             ]
         },
-        "episodic.Record": {
+        "episode.Record": {
             "type": "object",
             "properties": {
                 "actor": {
                     "description": "Actor is agent|user|system.",
                     "allOf": [
                         {
-                            "$ref": "#/definitions/episodic.Actor"
+                            "$ref": "#/definitions/episode.Actor"
                         }
                     ]
                 },
@@ -1290,7 +1319,7 @@ const docTemplate = `{
                     "description": "Kind is one of the values accepted by ValidKind.",
                     "allOf": [
                         {
-                            "$ref": "#/definitions/episodic.Kind"
+                            "$ref": "#/definitions/episode.Kind"
                         }
                     ]
                 },
@@ -1309,7 +1338,7 @@ const docTemplate = `{
                     "description": "Refs is set only for kind=document_chunk.",
                     "allOf": [
                         {
-                            "$ref": "#/definitions/episodic.Refs"
+                            "$ref": "#/definitions/episode.Refs"
                         }
                     ]
                 },
@@ -1319,7 +1348,7 @@ const docTemplate = `{
                 }
             }
         },
-        "episodic.Refs": {
+        "episode.Refs": {
             "type": "object",
             "properties": {
                 "chunk_seq": {
@@ -1327,6 +1356,160 @@ const docTemplate = `{
                 },
                 "doc_sha": {
                     "type": "string"
+                }
+            }
+        },
+        "httpserver.ConsolidateRequest": {
+            "type": "object",
+            "properties": {
+                "dry_run": {
+                    "type": "boolean"
+                },
+                "projects": {
+                    "description": "Projects limits the run to \"ws/team/proj\" strings; empty = all.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "httpserver.CreateEpisodeRequest": {
+            "type": "object",
+            "properties": {
+                "actor": {
+                    "$ref": "#/definitions/episode.Actor"
+                },
+                "entities": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "kind": {
+                    "$ref": "#/definitions/episode.Kind"
+                },
+                "occurred_at": {
+                    "type": "string"
+                },
+                "refs": {
+                    "$ref": "#/definitions/episode.Refs"
+                },
+                "text": {
+                    "type": "string"
+                }
+            }
+        },
+        "httpserver.Envelope": {
+            "type": "object",
+            "properties": {
+                "data": {},
+                "error": {
+                    "$ref": "#/definitions/apierr.Error"
+                },
+                "success": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "httpserver.S3SyncStatus": {
+            "type": "object",
+            "properties": {
+                "bucket": {
+                    "type": "string"
+                },
+                "last_archive_at": {
+                    "type": "string"
+                },
+                "last_snapshot_at": {
+                    "type": "string"
+                },
+                "reachable": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "httpserver.StatusReport": {
+            "type": "object",
+            "properties": {
+                "degraded": {
+                    "description": "Degraded lists currently unavailable derived services.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "dirty_files": {
+                    "description": "DirtyFiles lists hot files whose derived upsert failed and awaits\nrehydration.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "drift": {
+                    "description": "Drift is the live manifest-vs-derived comparison.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/rehydrate.DriftReport"
+                        }
+                    ]
+                },
+                "manifest_updated_at": {
+                    "description": "ManifestUpdatedAt is the manifest's own freshness timestamp.",
+                    "type": "string"
+                },
+                "s3": {
+                    "description": "S3 reports cold-store reachability and last successful archive/snapshot\nactivity.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/httpserver.S3SyncStatus"
+                        }
+                    ]
+                },
+                "stale_unconsolidated": {
+                    "type": "integer"
+                },
+                "unconsolidated": {
+                    "description": "Unconsolidated counts episodes not yet distilled; StaleUnconsolidated\ncounts those older than the TTL that still refuse to age (§3.1 —\nsurfaced forever, never auto-deleted).",
+                    "type": "integer"
+                }
+            }
+        },
+        "knowledge.CreateNodeInput": {
+            "type": "object",
+            "properties": {
+                "aliases": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "body": {
+                    "type": "string"
+                },
+                "kind": {
+                    "$ref": "#/definitions/knowledge.NodeKind"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "provenance": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "review_after": {
+                    "type": "string"
+                },
+                "supersedes": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "trust": {
+                    "$ref": "#/definitions/knowledge.Trust"
                 }
             }
         },
@@ -1350,6 +1533,20 @@ const docTemplate = `{
                 },
                 "to": {
                     "type": "string"
+                }
+            }
+        },
+        "knowledge.EdgeResult": {
+            "type": "object",
+            "properties": {
+                "degraded": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "edge": {
+                    "$ref": "#/definitions/knowledge.Edge"
                 }
             }
         },
@@ -1446,6 +1643,51 @@ const docTemplate = `{
                 "KindDocument"
             ]
         },
+        "knowledge.NodeResult": {
+            "type": "object",
+            "properties": {
+                "degraded": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "node": {
+                    "$ref": "#/definitions/knowledge.Node"
+                }
+            }
+        },
+        "knowledge.PatchNodeInput": {
+            "type": "object",
+            "properties": {
+                "op": {
+                    "type": "string"
+                },
+                "reason": {
+                    "type": "string"
+                },
+                "state": {
+                    "$ref": "#/definitions/knowledge.State"
+                }
+            }
+        },
+        "knowledge.PurgeResult": {
+            "type": "object",
+            "properties": {
+                "degraded": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "purged_id": {
+                    "type": "string"
+                },
+                "removed_edges": {
+                    "type": "integer"
+                }
+            }
+        },
         "knowledge.Rel": {
             "type": "string",
             "enum": [
@@ -1538,248 +1780,6 @@ const docTemplate = `{
                 "verified": {
                     "description": "Verified is set when verify=true ran a full hash audit (§5 reindex).",
                     "type": "boolean"
-                }
-            }
-        },
-        "search.Hit": {
-            "type": "object",
-            "properties": {
-                "excerpt": {
-                    "description": "Excerpt is a highlighted fragment of Text, not the full body.",
-                    "type": "string"
-                },
-                "record": {
-                    "$ref": "#/definitions/episodic.Record"
-                },
-                "score": {
-                    "type": "number"
-                }
-            }
-        },
-        "server.ConsolidateRequest": {
-            "type": "object",
-            "properties": {
-                "dry_run": {
-                    "type": "boolean"
-                },
-                "projects": {
-                    "description": "Projects limits the run to \"ws/team/proj\" strings; empty = all.",
-                    "type": "array",
-                    "items": {
-                        "type": "string"
-                    }
-                }
-            }
-        },
-        "server.CreateEpisodeRequest": {
-            "type": "object",
-            "properties": {
-                "actor": {
-                    "$ref": "#/definitions/episodic.Actor"
-                },
-                "entities": {
-                    "type": "array",
-                    "items": {
-                        "type": "string"
-                    }
-                },
-                "kind": {
-                    "$ref": "#/definitions/episodic.Kind"
-                },
-                "occurred_at": {
-                    "type": "string"
-                },
-                "refs": {
-                    "$ref": "#/definitions/episodic.Refs"
-                },
-                "text": {
-                    "type": "string"
-                }
-            }
-        },
-        "server.CreateEpisodeResponse": {
-            "type": "object",
-            "properties": {
-                "degraded": {
-                    "type": "array",
-                    "items": {
-                        "type": "string"
-                    }
-                },
-                "record": {
-                    "$ref": "#/definitions/episodic.Record"
-                }
-            }
-        },
-        "server.CreateNodeRequest": {
-            "type": "object",
-            "properties": {
-                "aliases": {
-                    "type": "array",
-                    "items": {
-                        "type": "string"
-                    }
-                },
-                "body": {
-                    "type": "string"
-                },
-                "kind": {
-                    "$ref": "#/definitions/knowledge.NodeKind"
-                },
-                "name": {
-                    "type": "string"
-                },
-                "provenance": {
-                    "type": "array",
-                    "items": {
-                        "type": "string"
-                    }
-                },
-                "review_after": {
-                    "type": "string"
-                },
-                "supersedes": {
-                    "type": "array",
-                    "items": {
-                        "type": "string"
-                    }
-                },
-                "trust": {
-                    "$ref": "#/definitions/knowledge.Trust"
-                }
-            }
-        },
-        "server.EdgeResponse": {
-            "type": "object",
-            "properties": {
-                "degraded": {
-                    "type": "array",
-                    "items": {
-                        "type": "string"
-                    }
-                },
-                "edge": {
-                    "$ref": "#/definitions/knowledge.Edge"
-                }
-            }
-        },
-        "server.Envelope": {
-            "type": "object",
-            "properties": {
-                "data": {},
-                "error": {
-                    "$ref": "#/definitions/apierr.Error"
-                },
-                "success": {
-                    "type": "boolean"
-                }
-            }
-        },
-        "server.NodeResponse": {
-            "type": "object",
-            "properties": {
-                "degraded": {
-                    "type": "array",
-                    "items": {
-                        "type": "string"
-                    }
-                },
-                "node": {
-                    "$ref": "#/definitions/knowledge.Node"
-                }
-            }
-        },
-        "server.PatchNodeRequest": {
-            "type": "object",
-            "properties": {
-                "op": {
-                    "type": "string"
-                },
-                "reason": {
-                    "type": "string"
-                },
-                "state": {
-                    "$ref": "#/definitions/knowledge.State"
-                }
-            }
-        },
-        "server.PurgeNodeResponse": {
-            "type": "object",
-            "properties": {
-                "degraded": {
-                    "type": "array",
-                    "items": {
-                        "type": "string"
-                    }
-                },
-                "purged_id": {
-                    "type": "string"
-                },
-                "removed_edges": {
-                    "type": "integer"
-                }
-            }
-        },
-        "server.S3SyncStatus": {
-            "type": "object",
-            "properties": {
-                "bucket": {
-                    "type": "string"
-                },
-                "last_archive_at": {
-                    "type": "string"
-                },
-                "last_snapshot_at": {
-                    "type": "string"
-                },
-                "reachable": {
-                    "type": "boolean"
-                }
-            }
-        },
-        "server.StatusReport": {
-            "type": "object",
-            "properties": {
-                "degraded": {
-                    "description": "Degraded lists currently unavailable derived services.",
-                    "type": "array",
-                    "items": {
-                        "type": "string"
-                    }
-                },
-                "dirty_files": {
-                    "description": "DirtyFiles lists hot files whose derived upsert failed and awaits\nrehydration.",
-                    "type": "array",
-                    "items": {
-                        "type": "string"
-                    }
-                },
-                "drift": {
-                    "description": "Drift is the live manifest-vs-derived comparison.",
-                    "allOf": [
-                        {
-                            "$ref": "#/definitions/rehydrate.DriftReport"
-                        }
-                    ]
-                },
-                "manifest_updated_at": {
-                    "description": "ManifestUpdatedAt is the manifest's own freshness timestamp.",
-                    "type": "string"
-                },
-                "s3": {
-                    "description": "S3 reports cold-store reachability and last successful archive/snapshot\nactivity.",
-                    "allOf": [
-                        {
-                            "$ref": "#/definitions/server.S3SyncStatus"
-                        }
-                    ]
-                },
-                "stale_unconsolidated": {
-                    "type": "integer"
-                },
-                "unconsolidated": {
-                    "description": "Unconsolidated counts episodes not yet distilled; StaleUnconsolidated\ncounts those older than the TTL that still refuse to age (§3.1 —\nsurfaced forever, never auto-deleted).",
-                    "type": "integer"
                 }
             }
         }

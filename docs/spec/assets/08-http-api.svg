@@ -1,0 +1,158 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 900" width="960" height="900" role="img" aria-labelledby="t d">
+  <title id="t">memory-mcp HTTP 라우트 트리</title>
+  <desc id="d">chi.NewRouter 아래 /healthz, /swagger/*, /v1 서브라우터가 놓이고, /v1 안에 운영·전역 문서 라우트와 프로젝트 스코프 서브라우터가 중첩된 계층. HTTP 메서드 배지는 episodic, knowledge, documents, ops 그룹 색으로 구분된다.</desc>
+
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#94a3b8"/>
+    </marker>
+  </defs>
+
+  <rect width="960" height="900" fill="#fbfcfe" rx="14"/>
+
+  <!-- header -->
+  <text x="36" y="40" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#0f172a">HTTP API — go-chi 라우트 트리</text>
+  <text x="36" y="60" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#64748b">모든 JSON 응답은 {success, data, error} 봉투 · swaggo 주석이 docs/swagger.json 을 생성한다</text>
+
+  <!-- root router -->
+  <rect x="36" y="80" width="888" height="44" rx="10" fill="#eef2ff" stroke="#4f46e5" stroke-width="1.6"/>
+  <text x="56" y="102" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#0f172a">chi.NewRouter()</text>
+  <text x="908" y="102" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11.5" fill="#64748b" text-anchor="end">internal/server/server.go · Router()</text>
+  <text x="56" y="118" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12.5" fill="#64748b">미들웨어 없음 · 인증 없음 · 등록되지 않은 경로는 chi 기본 404(text/plain)</text>
+
+  <!-- level 1 spine -->
+  <path d="M 52 124 L 52 225" stroke="#94a3b8" stroke-width="1.4" fill="none"/>
+  <path d="M 52 150 L 74 150" stroke="#94a3b8" stroke-width="1.4" fill="none" marker-end="url(#arrow)"/>
+  <path d="M 52 184 L 74 184" stroke="#94a3b8" stroke-width="1.4" fill="none" marker-end="url(#arrow)"/>
+  <path d="M 52 225 L 74 225" stroke="#94a3b8" stroke-width="1.4" fill="none" marker-end="url(#arrow)"/>
+
+  <!-- level 1 routes -->
+  <rect x="76" y="136" width="848" height="28" rx="10" fill="#eef2ff" stroke="#4f46e5" stroke-width="1.6"/>
+  <rect x="86" y="141" width="58" height="18" rx="6" fill="#ffffff" stroke="#4f46e5" stroke-width="1.2"/>
+  <text x="115" y="154" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="10.5" font-weight="600" fill="#4f46e5" text-anchor="middle">GET</text>
+  <text x="156" y="154.5" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="12.5" fill="#0f172a">/healthz</text>
+  <text x="910" y="154.5" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#64748b" text-anchor="end">liveness · data.status = ok</text>
+  <rect x="76" y="170" width="848" height="28" rx="10" fill="#eef2ff" stroke="#4f46e5" stroke-width="1.6"/>
+  <rect x="86" y="175" width="58" height="18" rx="6" fill="#ffffff" stroke="#4f46e5" stroke-width="1.2"/>
+  <text x="115" y="188" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="10.5" font-weight="600" fill="#4f46e5" text-anchor="middle">GET</text>
+  <text x="156" y="188.5" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="12.5" fill="#0f172a">/swagger/*</text>
+  <text x="910" y="188.5" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#64748b" text-anchor="end">UI /swagger/index.html · 스펙 /swagger/doc.json</text>
+
+  <!-- /v1 subrouter -->
+  <rect x="76" y="210" width="848" height="614" rx="10" fill="#ffffff" stroke="#94a3b8" stroke-width="1.6"/>
+  <text x="96" y="231" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="13" font-weight="600" fill="#0f172a">/v1</text>
+  <text x="908" y="231" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11.5" fill="#64748b" text-anchor="end">r.Route("/v1", …)</text>
+  <path d="M 92 240 L 92 437" stroke="#94a3b8" stroke-width="1.4" fill="none"/>
+  <path d="M 92 260 L 110 260" stroke="#94a3b8" stroke-width="1.4" fill="none" marker-end="url(#arrow)"/>
+  <path d="M 92 294 L 110 294" stroke="#94a3b8" stroke-width="1.4" fill="none" marker-end="url(#arrow)"/>
+  <path d="M 92 328 L 110 328" stroke="#94a3b8" stroke-width="1.4" fill="none" marker-end="url(#arrow)"/>
+  <path d="M 92 362 L 110 362" stroke="#94a3b8" stroke-width="1.4" fill="none" marker-end="url(#arrow)"/>
+  <path d="M 92 396 L 110 396" stroke="#94a3b8" stroke-width="1.4" fill="none" marker-end="url(#arrow)"/>
+  <path d="M 92 437 L 110 437" stroke="#94a3b8" stroke-width="1.4" fill="none" marker-end="url(#arrow)"/>
+
+  <rect x="112" y="246" width="796" height="28" rx="10" fill="#eef2ff" stroke="#4f46e5" stroke-width="1.6"/>
+  <rect x="122" y="251" width="58" height="18" rx="6" fill="#ffffff" stroke="#4f46e5" stroke-width="1.2"/>
+  <text x="151" y="264" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="10.5" font-weight="600" fill="#4f46e5" text-anchor="middle">GET</text>
+  <text x="192" y="264.5" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="12.5" fill="#0f172a">/status</text>
+  <text x="894" y="264.5" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#64748b" text-anchor="end">드리프트·미통합·S3 신선도 보고</text>
+  <rect x="112" y="280" width="796" height="28" rx="10" fill="#eef2ff" stroke="#4f46e5" stroke-width="1.6"/>
+  <rect x="122" y="285" width="58" height="18" rx="6" fill="#ffffff" stroke="#4f46e5" stroke-width="1.2"/>
+  <text x="151" y="298" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="10.5" font-weight="600" fill="#4f46e5" text-anchor="middle">POST</text>
+  <text x="192" y="298.5" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="12.5" fill="#0f172a">/consolidate</text>
+  <text x="894" y="298.5" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#64748b" text-anchor="end">§4 파이프라인 · dry_run 지원</text>
+  <rect x="112" y="314" width="796" height="28" rx="10" fill="#eef2ff" stroke="#4f46e5" stroke-width="1.6"/>
+  <rect x="122" y="319" width="58" height="18" rx="6" fill="#ffffff" stroke="#4f46e5" stroke-width="1.2"/>
+  <text x="151" y="332" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="10.5" font-weight="600" fill="#4f46e5" text-anchor="middle">POST</text>
+  <text x="192" y="332.5" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="12.5" fill="#0f172a">/reindex</text>
+  <text x="894" y="332.5" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#64748b" text-anchor="end">?verify=true 는 전량 해시 감사</text>
+  <rect x="112" y="348" width="796" height="28" rx="10" fill="#f1f5f9" stroke="#475569" stroke-width="1.6"/>
+  <rect x="122" y="353" width="58" height="18" rx="6" fill="#ffffff" stroke="#475569" stroke-width="1.2"/>
+  <text x="151" y="366" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="10.5" font-weight="600" fill="#475569" text-anchor="middle">GET</text>
+  <text x="192" y="366.5" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="12.5" fill="#0f172a">/documents/{sha}</text>
+  <text x="894" y="366.5" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#64748b" text-anchor="end">원본 바이트 스트림 — 봉투 아님</text>
+  <rect x="112" y="382" width="796" height="28" rx="10" fill="#f1f5f9" stroke="#475569" stroke-width="1.6"/>
+  <rect x="122" y="387" width="58" height="18" rx="6" fill="#ffffff" stroke="#475569" stroke-width="1.2"/>
+  <text x="151" y="400" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="10.5" font-weight="600" fill="#475569" text-anchor="middle">GET</text>
+  <text x="192" y="400.5" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="12.5" fill="#0f172a">/documents/{sha}/chunks</text>
+  <text x="894" y="400.5" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#64748b" text-anchor="end">document_chunk 에피소드 목록</text>
+
+  <!-- project-scoped subrouter -->
+  <rect x="112" y="422" width="796" height="386" rx="10" fill="#ffffff" stroke="#94a3b8" stroke-width="1.6"/>
+  <text x="132" y="443" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="13" font-weight="600" fill="#0f172a">/{ws}/{team}/{proj}</text>
+  <text x="892" y="443" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#64748b" text-anchor="end">세그먼트는 [a-z0-9._-]+ 만 허용</text>
+  <path d="M 128 452 L 128 778" stroke="#94a3b8" stroke-width="1.4" fill="none"/>
+  <path d="M 128 472 L 146 472" stroke="#94a3b8" stroke-width="1.4" fill="none" marker-end="url(#arrow)"/>
+  <path d="M 128 506 L 146 506" stroke="#94a3b8" stroke-width="1.4" fill="none" marker-end="url(#arrow)"/>
+  <path d="M 128 540 L 146 540" stroke="#94a3b8" stroke-width="1.4" fill="none" marker-end="url(#arrow)"/>
+  <path d="M 128 574 L 146 574" stroke="#94a3b8" stroke-width="1.4" fill="none" marker-end="url(#arrow)"/>
+  <path d="M 128 608 L 146 608" stroke="#94a3b8" stroke-width="1.4" fill="none" marker-end="url(#arrow)"/>
+  <path d="M 128 642 L 146 642" stroke="#94a3b8" stroke-width="1.4" fill="none" marker-end="url(#arrow)"/>
+  <path d="M 128 676 L 146 676" stroke="#94a3b8" stroke-width="1.4" fill="none" marker-end="url(#arrow)"/>
+  <path d="M 128 710 L 146 710" stroke="#94a3b8" stroke-width="1.4" fill="none" marker-end="url(#arrow)"/>
+  <path d="M 128 744 L 146 744" stroke="#94a3b8" stroke-width="1.4" fill="none" marker-end="url(#arrow)"/>
+  <path d="M 128 778 L 146 778" stroke="#94a3b8" stroke-width="1.4" fill="none" marker-end="url(#arrow)"/>
+
+  <rect x="148" y="458" width="744" height="28" rx="10" fill="#ecfdf5" stroke="#059669" stroke-width="1.6"/>
+  <rect x="158" y="463" width="58" height="18" rx="6" fill="#ffffff" stroke="#059669" stroke-width="1.2"/>
+  <text x="187" y="476" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="10.5" font-weight="600" fill="#059669" text-anchor="middle">POST</text>
+  <text x="228" y="476.5" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="12.5" fill="#0f172a">/episodes</text>
+  <text x="878" y="476.5" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#64748b" text-anchor="end">hot append 필수 · 색인은 best-effort</text>
+  <rect x="148" y="492" width="744" height="28" rx="10" fill="#ecfdf5" stroke="#059669" stroke-width="1.6"/>
+  <rect x="158" y="497" width="58" height="18" rx="6" fill="#ffffff" stroke="#059669" stroke-width="1.2"/>
+  <text x="187" y="510" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="10.5" font-weight="600" fill="#059669" text-anchor="middle">GET</text>
+  <text x="228" y="510.5" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="12.5" fill="#0f172a">/episodes/search</text>
+  <text x="878" y="510.5" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#64748b" text-anchor="end">q from to kinds · 발췌+점수만</text>
+  <rect x="148" y="526" width="744" height="28" rx="10" fill="#ecfdf5" stroke="#059669" stroke-width="1.6"/>
+  <rect x="158" y="531" width="58" height="18" rx="6" fill="#ffffff" stroke="#059669" stroke-width="1.2"/>
+  <text x="187" y="544" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="10.5" font-weight="600" fill="#059669" text-anchor="middle">GET</text>
+  <text x="228" y="544.5" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="12.5" fill="#0f172a">/episodes/{id}</text>
+  <text x="878" y="544.5" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#64748b" text-anchor="end">hot 조회 후 cold 아카이브 폴백</text>
+  <rect x="148" y="560" width="744" height="28" rx="10" fill="#fef3c7" stroke="#d97706" stroke-width="1.6"/>
+  <rect x="158" y="565" width="58" height="18" rx="6" fill="#ffffff" stroke="#d97706" stroke-width="1.2"/>
+  <text x="187" y="578" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="10.5" font-weight="600" fill="#d97706" text-anchor="middle">POST</text>
+  <text x="228" y="578.5" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="12.5" fill="#0f172a">/knowledge/nodes</text>
+  <text x="878" y="578.5" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#64748b" text-anchor="end">supersedes 로 체인 생성</text>
+  <rect x="148" y="594" width="744" height="28" rx="10" fill="#fef3c7" stroke="#d97706" stroke-width="1.6"/>
+  <rect x="158" y="599" width="58" height="18" rx="6" fill="#ffffff" stroke="#d97706" stroke-width="1.2"/>
+  <text x="187" y="612" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="10.5" font-weight="600" fill="#d97706" text-anchor="middle">PATCH</text>
+  <text x="228" y="612.5" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="12.5" fill="#0f172a">/knowledge/nodes/{id}</text>
+  <text x="878" y="612.5" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#64748b" text-anchor="end">set_state / deprecate(reason 필수)</text>
+  <rect x="148" y="628" width="744" height="28" rx="10" fill="#fee2e2" stroke="#dc2626" stroke-width="1.6"/>
+  <rect x="158" y="633" width="58" height="18" rx="6" fill="#ffffff" stroke="#dc2626" stroke-width="1.2"/>
+  <text x="187" y="646" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="10.5" font-weight="600" fill="#dc2626" text-anchor="middle">DELETE</text>
+  <text x="228" y="646.5" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="12.5" fill="#0f172a">/knowledge/nodes/{id}</text>
+  <text x="878" y="646.5" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#64748b" text-anchor="end">confirm=true 없으면 400 · S3가 백스톱</text>
+  <rect x="148" y="662" width="744" height="28" rx="10" fill="#fef3c7" stroke="#d97706" stroke-width="1.6"/>
+  <rect x="158" y="667" width="58" height="18" rx="6" fill="#ffffff" stroke="#d97706" stroke-width="1.2"/>
+  <text x="187" y="680" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="10.5" font-weight="600" fill="#d97706" text-anchor="middle">POST</text>
+  <text x="228" y="680.5" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="12.5" fill="#0f172a">/knowledge/edges</text>
+  <text x="878" y="680.5" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#64748b" text-anchor="end">(from,to,rel) 멱등 · 양끝 노드 필수</text>
+  <rect x="148" y="696" width="744" height="28" rx="10" fill="#fef3c7" stroke="#d97706" stroke-width="1.6"/>
+  <rect x="158" y="701" width="58" height="18" rx="6" fill="#ffffff" stroke="#d97706" stroke-width="1.2"/>
+  <text x="187" y="714" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="10.5" font-weight="600" fill="#d97706" text-anchor="middle">GET</text>
+  <text x="228" y="714.5" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="12.5" fill="#0f172a">/knowledge/search</text>
+  <text x="878" y="714.5" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#64748b" text-anchor="end">include_archived 옵트인</text>
+  <rect x="148" y="730" width="744" height="28" rx="10" fill="#fef3c7" stroke="#d97706" stroke-width="1.6"/>
+  <rect x="158" y="735" width="58" height="18" rx="6" fill="#ffffff" stroke="#d97706" stroke-width="1.2"/>
+  <text x="187" y="748" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="10.5" font-weight="600" fill="#d97706" text-anchor="middle">GET</text>
+  <text x="228" y="748.5" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="12.5" fill="#0f172a">/knowledge/graph</text>
+  <text x="878" y="748.5" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#64748b" text-anchor="end">entity 필수 · depth 1~10</text>
+  <rect x="148" y="764" width="744" height="28" rx="10" fill="#f1f5f9" stroke="#475569" stroke-width="1.6"/>
+  <rect x="158" y="769" width="58" height="18" rx="6" fill="#ffffff" stroke="#475569" stroke-width="1.2"/>
+  <text x="187" y="782" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="10.5" font-weight="600" fill="#475569" text-anchor="middle">POST</text>
+  <text x="228" y="782.5" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="12.5" fill="#0f172a">/documents</text>
+  <text x="878" y="782.5" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#64748b" text-anchor="end">multipart file · 최대 128 MiB</text>
+
+  <!-- legend -->
+  <rect x="36" y="842" width="14" height="14" rx="4" fill="#ecfdf5" stroke="#059669" stroke-width="1.6"/>
+  <text x="58" y="854" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#64748b">episodic</text>
+  <rect x="150" y="842" width="14" height="14" rx="4" fill="#fef3c7" stroke="#d97706" stroke-width="1.6"/>
+  <text x="172" y="854" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#64748b">knowledge</text>
+  <rect x="280" y="842" width="14" height="14" rx="4" fill="#f1f5f9" stroke="#475569" stroke-width="1.6"/>
+  <text x="302" y="854" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#64748b">documents</text>
+  <rect x="410" y="842" width="14" height="14" rx="4" fill="#eef2ff" stroke="#4f46e5" stroke-width="1.6"/>
+  <text x="432" y="854" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#64748b">ops / 운영</text>
+  <rect x="520" y="842" width="14" height="14" rx="4" fill="#fee2e2" stroke="#dc2626" stroke-width="1.6"/>
+  <text x="542" y="854" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#64748b">purge (파괴적)</text>
+  <text x="36" y="880" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#64748b">배지 색은 그룹을 뜻한다 · 트리 순서는 server.go Router() 의 등록 순서와 같다</text>
+</svg>

@@ -1,0 +1,176 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 650" width="960" height="650" role="img" aria-labelledby="t d">
+  <title id="t">문서 ingest 파이프라인과 세 산출물</title>
+  <desc id="d">업로드된 파일이 sha256 계산, cold-first blob 업로드, 결정적 텍스트 추출, 2 KiB 청킹, knowledge 문서 노드 생성의 5단계를 거쳐 blob, document_chunk 레코드들, document 노드 세 산출물로 갈라지고 각각 S3 cold, hot episodic JSON + OpenSearch, hot knowledge JSON + Neo4j로 흘러가는 구조. 파생 저장소 upsert는 best-effort라 실패하면 manifest dirty 마크와 응답의 degraded 노트로 보고된다. 아래쪽에 청크 히트에서 원본 바이트까지의 회수 경로가 있다.</desc>
+
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#94a3b8"/>
+    </marker>
+    <marker id="arrowSolid" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#4f46e5"/>
+    </marker>
+  </defs>
+
+  <rect width="960" height="650" fill="#fbfcfe" rx="14"/>
+
+  <g font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">
+
+    <text x="40" y="28" font-size="11.5" fill="#64748b">internal/document · Ingest() — 문서 하나 = blob + document 노드 + N개 document_chunk</text>
+
+    <!-- request bar -->
+    <rect x="40" y="42" width="880" height="48" rx="10" fill="#eef2ff" stroke="#4f46e5" stroke-width="1.6"/>
+    <text x="62" y="64" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="13" fill="#0f172a">POST /v1/{ws}/{team}/{proj}/documents</text>
+    <text x="62" y="81" font-size="11.5" fill="#64748b">multipart/form-data · 필드명 file · 본문 128 MiB · 인메모리 32 MiB</text>
+    <text x="898" y="70" text-anchor="end" font-size="12" font-weight="600" fill="#4f46e5">cold-first · 결정적 · 서버 내 추론 없음</text>
+
+    <line x1="119" y1="90" x2="119" y2="110" stroke="#4f46e5" stroke-width="1.6" marker-end="url(#arrowSolid)"/>
+
+    <!-- pipeline stage 1: sha256 -->
+    <rect x="40" y="112" width="158" height="90" rx="10" fill="#ffffff" stroke="#c7d2fe" stroke-width="1.6"/>
+    <text x="56" y="136" font-size="15" font-weight="600" fill="#0f172a">① sha256</text>
+    <text x="56" y="157" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11.5" fill="#334155">blob.Client.Put</text>
+    <text x="56" y="175" font-size="11.5" fill="#64748b">temp+rename 쓰기</text>
+    <text x="56" y="192" font-size="11.5" fill="#64748b">동일 sha면 no-op</text>
+
+    <line x1="200" y1="157" x2="218" y2="157" stroke="#4f46e5" stroke-width="1.6" marker-end="url(#arrowSolid)"/>
+
+    <!-- pipeline stage 2: blob upload -->
+    <rect x="220" y="112" width="158" height="90" rx="10" fill="#f1f5f9" stroke="#475569" stroke-width="1.6"/>
+    <text x="236" y="136" font-size="15" font-weight="600" fill="#0f172a">② blob 업로드</text>
+    <text x="236" y="157" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11.5" fill="#334155">UploadBlob</text>
+    <text x="236" y="175" font-size="11.5" fill="#64748b">cold-first · S3 확인</text>
+    <text x="236" y="192" font-size="11.5" fill="#64748b">실패 = ingest 실패</text>
+
+    <line x1="380" y1="157" x2="399" y2="157" stroke="#4f46e5" stroke-width="1.6" marker-end="url(#arrowSolid)"/>
+
+    <!-- pipeline stage 3: extraction -->
+    <rect x="401" y="112" width="158" height="90" rx="10" fill="#ffffff" stroke="#c7d2fe" stroke-width="1.6"/>
+    <text x="417" y="136" font-size="15" font-weight="600" fill="#0f172a">③ 텍스트 추출</text>
+    <text x="417" y="157" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11.5" fill="#334155">textExtractor</text>
+    <text x="417" y="175" font-size="11.5" fill="#64748b">PDF · md · txt</text>
+    <text x="417" y="192" font-size="11.5" fill="#64748b">불가 → 건너뛰고 보고</text>
+
+    <line x1="561" y1="157" x2="579" y2="157" stroke="#4f46e5" stroke-width="1.6" marker-end="url(#arrowSolid)"/>
+
+    <!-- pipeline stage 4: chunking -->
+    <rect x="581" y="112" width="158" height="90" rx="10" fill="#ecfdf5" stroke="#059669" stroke-width="1.6"/>
+    <text x="597" y="136" font-size="15" font-weight="600" fill="#0f172a">④ 청킹</text>
+    <text x="597" y="157" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11.5" fill="#334155">chunkDocument()</text>
+    <text x="597" y="175" font-size="11.5" fill="#64748b">2048 B · 룬 경계 유지</text>
+    <text x="597" y="192" font-size="11.5" fill="#64748b">상한 초과분 잘림</text>
+
+    <line x1="741" y1="157" x2="760" y2="157" stroke="#4f46e5" stroke-width="1.6" marker-end="url(#arrowSolid)"/>
+
+    <!-- pipeline stage 5: document node -->
+    <rect x="762" y="112" width="158" height="90" rx="10" fill="#fef3c7" stroke="#d97706" stroke-width="1.6"/>
+    <text x="778" y="136" font-size="15" font-weight="600" fill="#0f172a">⑤ 문서 노드</text>
+    <text x="778" y="157" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11.5" fill="#334155">kind=document</text>
+    <text x="778" y="175" font-size="11.5" fill="#64748b">name = 파일명</text>
+    <text x="778" y="192" font-size="11.5" fill="#64748b">trust = imported</text>
+
+    <!-- fan-out to the three artifacts -->
+    <path d="M 299 202 C 299 228, 180 224, 180 246" fill="none" stroke="#4f46e5" stroke-width="1.6" marker-end="url(#arrowSolid)"/>
+    <path d="M 660 202 C 660 228, 480 224, 480 246" fill="none" stroke="#4f46e5" stroke-width="1.6" marker-end="url(#arrowSolid)"/>
+    <path d="M 841 202 C 841 228, 780 224, 780 246" fill="none" stroke="#4f46e5" stroke-width="1.6" marker-end="url(#arrowSolid)"/>
+
+    <!-- artifact 1: blob -->
+    <rect x="40" y="250" width="280" height="62" rx="10" fill="#f1f5f9" stroke="#475569" stroke-width="1.6"/>
+    <text x="58" y="276" font-size="15" font-weight="600" fill="#0f172a">blob — 원본 바이트</text>
+    <text x="58" y="297" font-size="11.5" fill="#64748b">sha256이 곧 주소 · 내용은 불투명</text>
+
+    <!-- artifact 2: chunks -->
+    <rect x="340" y="250" width="280" height="62" rx="10" fill="#ecfdf5" stroke="#059669" stroke-width="1.6"/>
+    <text x="358" y="276" font-size="15" font-weight="600" fill="#0f172a">document_chunk × N</text>
+    <text x="358" y="297" font-size="11.5" fill="#64748b">refs.doc_sha · chunk_seq · 0부터 순번</text>
+
+    <!-- artifact 3: document node -->
+    <rect x="640" y="250" width="280" height="62" rx="10" fill="#fef3c7" stroke="#d97706" stroke-width="1.6"/>
+    <text x="658" y="276" font-size="15" font-weight="600" fill="#0f172a">knowledge document 노드</text>
+    <text x="658" y="297" font-size="11.5" fill="#64748b">name = 파일명 · aliases = [sha]</text>
+
+    <line x1="180" y1="312" x2="180" y2="344" stroke="#4f46e5" stroke-width="1.6" marker-end="url(#arrowSolid)"/>
+    <line x1="480" y1="312" x2="480" y2="344" stroke="#4f46e5" stroke-width="1.6" marker-end="url(#arrowSolid)"/>
+    <line x1="780" y1="312" x2="780" y2="344" stroke="#4f46e5" stroke-width="1.6" marker-end="url(#arrowSolid)"/>
+
+    <!-- authoritative stores -->
+    <rect x="40" y="346" width="280" height="68" rx="10" fill="#f1f5f9" stroke="#475569" stroke-width="1.6"/>
+    <text x="58" y="370" font-size="13" font-weight="600" fill="#0f172a">cold — S3 · 정본</text>
+    <text x="58" y="389" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11.5" fill="#334155">{username}/blobs/{sha[:2]}/{sha}</text>
+    <text x="58" y="406" font-size="11.5" fill="#64748b">이미 있으면 업로드 생략</text>
+
+    <rect x="340" y="346" width="280" height="68" rx="10" fill="#eef2ff" stroke="#4f46e5" stroke-width="1.6"/>
+    <text x="358" y="370" font-size="13" font-weight="600" fill="#0f172a">hot — episodic JSON · 정본</text>
+    <text x="358" y="389" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11.5" fill="#334155">episodic/{ws}/{team}/{proj}.json</text>
+    <text x="358" y="406" font-size="11.5" fill="#64748b">AppendEpisode · 원자 쓰기</text>
+
+    <rect x="640" y="346" width="280" height="68" rx="10" fill="#eef2ff" stroke="#4f46e5" stroke-width="1.6"/>
+    <text x="658" y="370" font-size="13" font-weight="600" fill="#0f172a">hot — knowledge JSON · 정본</text>
+    <text x="658" y="389" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11.5" fill="#334155">knowledge/{ws}/{team}/{proj}.json</text>
+    <text x="658" y="406" font-size="11.5" fill="#64748b">UpdateKnowledge · 읽기·쓰기 한 락</text>
+
+    <line x1="180" y1="414" x2="180" y2="446" stroke="#94a3b8" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+    <line x1="480" y1="414" x2="480" y2="446" stroke="#94a3b8" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+    <line x1="780" y1="414" x2="780" y2="446" stroke="#94a3b8" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+    <text x="192" y="436" font-size="11.5" fill="#64748b">축출 가능 캐시</text>
+    <text x="492" y="436" font-size="11.5" fill="#64748b">best-effort 색인</text>
+    <text x="792" y="436" font-size="11.5" fill="#64748b">best-effort MERGE</text>
+
+    <!-- derived / cache tier -->
+    <rect x="40" y="448" width="280" height="64" rx="10" fill="#eef2ff" stroke="#4f46e5" stroke-width="1.6"/>
+    <text x="58" y="471" font-size="13" font-weight="600" fill="#0f172a">hot — blob 캐시</text>
+    <text x="58" y="489" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11.5" fill="#334155">~/.local/dj-memory/blobs/{sha}</text>
+    <text x="58" y="505" font-size="11.5" fill="#64748b">지워져도 S3가 백스톱</text>
+
+    <rect x="340" y="448" width="280" height="64" rx="10" fill="#ecfdf5" stroke="#059669" stroke-width="1.6"/>
+    <text x="358" y="471" font-size="13" font-weight="600" fill="#0f172a">OpenSearch — episodic</text>
+    <text x="358" y="489" font-size="11.5" fill="#334155">IndexRecords · nori 색인</text>
+    <text x="358" y="505" font-size="11.5" fill="#64748b">실패 → dirty + degraded 노트</text>
+
+    <rect x="640" y="448" width="280" height="64" rx="10" fill="#fef3c7" stroke="#d97706" stroke-width="1.6"/>
+    <text x="658" y="471" font-size="13" font-weight="600" fill="#0f172a">Neo4j — knowledge</text>
+    <text x="658" y="489" font-size="11.5" fill="#334155">UpsertNodes · MERGE</text>
+    <text x="658" y="505" font-size="11.5" fill="#64748b">실패 → dirty + degraded 노트</text>
+
+    <!-- retrieval strip -->
+    <text x="40" y="536" font-size="11.5" fill="#64748b">회수 — 청크 히트에서 원본 바이트까지</text>
+    <rect x="40" y="546" width="880" height="62" rx="10" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.4"/>
+
+    <rect x="56" y="560" width="196" height="34" rx="8" fill="#ecfdf5" stroke="#059669" stroke-width="1.6"/>
+    <text x="154" y="581" text-anchor="middle" font-size="11.5" fill="#0f172a">청크 히트 → refs.doc_sha</text>
+
+    <line x1="254" y1="577" x2="270" y2="577" stroke="#94a3b8" stroke-width="1.6" marker-end="url(#arrow)"/>
+
+    <rect x="272" y="560" width="196" height="34" rx="8" fill="#eef2ff" stroke="#4f46e5" stroke-width="1.6"/>
+    <text x="370" y="581" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11" fill="#0f172a">GET /v1/documents/{sha}</text>
+
+    <line x1="470" y1="577" x2="486" y2="577" stroke="#94a3b8" stroke-width="1.6" marker-end="url(#arrow)"/>
+
+    <rect x="488" y="560" width="196" height="34" rx="8" fill="#eef2ff" stroke="#4f46e5" stroke-width="1.6"/>
+    <text x="586" y="581" text-anchor="middle" font-size="11.5" fill="#0f172a">로컬 캐시 blobs/{sha}</text>
+
+    <line x1="686" y1="577" x2="702" y2="577" stroke="#94a3b8" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+
+    <rect x="704" y="560" width="200" height="34" rx="8" fill="#f1f5f9" stroke="#475569" stroke-width="1.6"/>
+    <text x="804" y="581" text-anchor="middle" font-size="11.5" fill="#0f172a">미스 → S3 재수화 · 재캐시</text>
+
+    <!-- legend -->
+    <rect x="40" y="618" width="12" height="12" rx="3" fill="#eef2ff" stroke="#4f46e5" stroke-width="1.4"/>
+    <text x="58" y="628" font-size="11.5" fill="#64748b">hot 정본</text>
+
+    <rect x="150" y="618" width="12" height="12" rx="3" fill="#ecfdf5" stroke="#059669" stroke-width="1.4"/>
+    <text x="168" y="628" font-size="11.5" fill="#64748b">episodic · OpenSearch</text>
+
+    <rect x="330" y="618" width="12" height="12" rx="3" fill="#fef3c7" stroke="#d97706" stroke-width="1.4"/>
+    <text x="348" y="628" font-size="11.5" fill="#64748b">knowledge · Neo4j</text>
+
+    <rect x="490" y="618" width="12" height="12" rx="3" fill="#f1f5f9" stroke="#475569" stroke-width="1.4"/>
+    <text x="508" y="628" font-size="11.5" fill="#64748b">cold · S3</text>
+
+    <line x1="600" y1="624" x2="624" y2="624" stroke="#4f46e5" stroke-width="1.6"/>
+    <text x="630" y="628" font-size="11.5" fill="#64748b">정본 쓰기</text>
+
+    <line x1="700" y1="624" x2="724" y2="624" stroke="#94a3b8" stroke-width="1.6" stroke-dasharray="5 4"/>
+    <text x="730" y="628" font-size="11.5" fill="#64748b">파생 · best-effort</text>
+
+  </g>
+</svg>

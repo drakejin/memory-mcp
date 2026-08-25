@@ -1,0 +1,151 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 936" width="960" height="936" role="img" aria-labelledby="t d">
+  <title id="t">memory-mcp 패키지 계층과 2계층 에러 경계</title>
+  <desc id="d">cmd 조립 루트, internal/server 전송 계층, 그 아래 서비스·어댑터·정본 저장소·도메인 계층으로 내려가는 단방향 의존 그래프. 전송 계층과 서비스 계층 사이에 가로선으로 그려진 에러 타입 경계는 핸들러의 apierr.From 18개 호출부만 넘는다. 아래 계층은 전부 errs.Error로 말하고 최하층 internal/errs는 internal import가 0이며 나머지 14개 패키지 전부가 이것을 import한다.</desc>
+
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#94a3b8"/>
+    </marker>
+  </defs>
+
+  <rect width="960" height="936" fill="#fbfcfe" rx="14"/>
+
+  <!-- header -->
+  <text x="40" y="44" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#0f172a">코드 구조 — 패키지 계층과 2계층 에러 경계</text>
+  <text x="40" y="64" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#64748b">화살표는 import 방향. 의존은 아래로만 흐르고 순환은 없다.</text>
+  <text x="924" y="44" text-anchor="end" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="600" fill="#4f46e5">internal/ 15개 패키지</text>
+
+  <!-- L6 composition root -->
+  <text x="40" y="88" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#64748b">조립 루트 — 구현체를 고르고 주입하는 유일한 곳</text>
+  <rect x="36" y="96" width="888" height="68" rx="10" fill="#eef2ff" stroke="#4f46e5" stroke-width="1.6"/>
+  <text x="58" y="118" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="13" font-weight="600" fill="#0f172a">cmd/memory-mcp/main.go</text>
+  <text x="58" y="136" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#64748b">config.Load → hotstore.NewSystemClock · ulid.New · hotstore.New · blob.New</text>
+  <text x="58" y="154" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#64748b">→ search.New · graph.New · cold.New (실패는 Warn 후 nil) → document·consolidate·rehydrate.New → server.New</text>
+
+  <line x1="700" y1="164" x2="700" y2="202" stroke="#94a3b8" stroke-width="1.6" marker-end="url(#arrow)"/>
+
+  <!-- L5 transport -->
+  <text x="40" y="198" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#64748b">전송 — HTTP status·Envelope를 아는 유일한 계층 (아래 계층을 모두 직접 import)</text>
+  <rect x="36" y="206" width="888" height="110" rx="10" fill="#eef2ff" stroke="#4f46e5" stroke-width="1.6"/>
+  <text x="58" y="230" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="13" font-weight="600" fill="#0f172a">internal/server</text>
+
+  <g font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11" fill="#0f172a" text-anchor="middle">
+    <rect x="176" y="240" width="112" height="26" rx="8" fill="#ffffff" stroke="#c7d2fe" stroke-width="1.4"/>
+    <text x="232" y="257">server.go</text>
+    <rect x="300" y="240" width="112" height="26" rx="8" fill="#ffffff" stroke="#c7d2fe" stroke-width="1.4"/>
+    <text x="356" y="257">deps.go</text>
+    <rect x="424" y="240" width="112" height="26" rx="8" fill="#ffffff" stroke="#c7d2fe" stroke-width="1.4"/>
+    <text x="480" y="257">handlers_*.go</text>
+    <rect x="548" y="240" width="112" height="26" rx="8" fill="#ffffff" stroke="#c7d2fe" stroke-width="1.4"/>
+    <text x="604" y="257">validate.go</text>
+    <rect x="672" y="240" width="112" height="26" rx="8" fill="#ffffff" stroke="#c7d2fe" stroke-width="1.4"/>
+    <text x="728" y="257">respond.go</text>
+    <rect x="796" y="240" width="112" height="26" rx="8" fill="#ffffff" stroke="#c7d2fe" stroke-width="1.4"/>
+    <text x="852" y="257">degraded.go</text>
+  </g>
+
+  <rect x="176" y="276" width="256" height="26" rx="8" fill="#fee2e2" stroke="#dc2626" stroke-width="1.4"/>
+  <text x="304" y="293" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11" fill="#0f172a">internal/server/apierr</text>
+  <text x="446" y="293" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#64748b">Kind → HTTP 고정 매핑. status를 정하는 유일한 곳 (internal import 는 errs 하나)</text>
+
+  <!-- error boundary -->
+  <text x="44" y="336" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" font-weight="600" fill="#dc2626">위 · 전송 에러 *apierr.Error — Status / Code / Message → Envelope.error</text>
+  <line x1="36" y1="346" x2="924" y2="346" stroke="#dc2626" stroke-width="2" stroke-dasharray="8 5"/>
+  <text x="44" y="366" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" font-weight="600" fill="#dc2626">아래 · 도메인 에러 *errs.Error — Kind + Op / Entity / ID / Msg / Fields</text>
+
+  <line x1="700" y1="316" x2="700" y2="406" stroke="#94a3b8" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <text x="712" y="340" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11" fill="#0f172a">apierr.From(err) · 18 지점</text>
+
+  <!-- L4 services -->
+  <text x="40" y="400" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#64748b">서비스 — 결정적 파이프라인. HTTP를 전혀 모른다 (Service / service)</text>
+  <rect x="36" y="408" width="284" height="62" rx="10" fill="#ffffff" stroke="#94a3b8" stroke-width="1.6"/>
+  <text x="54" y="432" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="13" font-weight="600" fill="#0f172a">consolidate</text>
+  <text x="54" y="453" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#64748b">후보·통계·에이징·스냅샷</text>
+
+  <rect x="338" y="408" width="284" height="62" rx="10" fill="#ffffff" stroke="#94a3b8" stroke-width="1.6"/>
+  <text x="356" y="432" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="13" font-weight="600" fill="#0f172a">document</text>
+  <text x="356" y="453" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#64748b">blob · 청크 · 문서 노드 인제스트</text>
+
+  <rect x="640" y="408" width="284" height="62" rx="10" fill="#ffffff" stroke="#94a3b8" stroke-width="1.6"/>
+  <text x="658" y="432" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="13" font-weight="600" fill="#0f172a">rehydrate</text>
+  <text x="658" y="453" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#64748b">드리프트 판정 · 재수화</text>
+
+  <line x1="700" y1="470" x2="700" y2="508" stroke="#94a3b8" stroke-width="1.6" marker-end="url(#arrow)"/>
+
+  <!-- L3 adapters -->
+  <text x="40" y="502" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#64748b">어댑터 — 외부 시스템 경계. 전부 exported Client 뒤에, 구현체는 unexported client</text>
+  <rect x="36" y="510" width="211" height="62" rx="10" fill="#ecfdf5" stroke="#059669" stroke-width="1.6"/>
+  <text x="54" y="534" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="13" font-weight="600" fill="#0f172a">search</text>
+  <text x="229" y="534" text-anchor="end" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748b">OpenSearch</text>
+  <text x="54" y="555" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11" fill="#334155">Client / client · 8</text>
+
+  <rect x="261" y="510" width="211" height="62" rx="10" fill="#fef3c7" stroke="#d97706" stroke-width="1.6"/>
+  <text x="279" y="534" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="13" font-weight="600" fill="#0f172a">graph</text>
+  <text x="454" y="534" text-anchor="end" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748b">Neo4j</text>
+  <text x="279" y="555" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11" fill="#334155">Client / client · 11</text>
+
+  <rect x="486" y="510" width="211" height="62" rx="10" fill="#f1f5f9" stroke="#475569" stroke-width="1.6"/>
+  <text x="504" y="534" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="13" font-weight="600" fill="#0f172a">cold</text>
+  <text x="679" y="534" text-anchor="end" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748b">S3</text>
+  <text x="504" y="555" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11" fill="#334155">Client / client · 5</text>
+
+  <rect x="711" y="510" width="211" height="62" rx="10" fill="#f1f5f9" stroke="#475569" stroke-width="1.6"/>
+  <text x="729" y="534" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="13" font-weight="600" fill="#0f172a">blob</text>
+  <text x="904" y="534" text-anchor="end" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="10.5" fill="#64748b">로컬 파일</text>
+  <text x="729" y="555" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11" fill="#334155">Client / client · 4</text>
+
+  <line x1="700" y1="572" x2="700" y2="610" stroke="#94a3b8" stroke-width="1.6" marker-end="url(#arrow)"/>
+
+  <!-- L2 canonical store -->
+  <text x="40" y="604" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#64748b">정본 — 상위 계층 전부가 주소를 빌려 쓰는 단일 저장소</text>
+  <rect x="36" y="612" width="888" height="54" rx="10" fill="#eef2ff" stroke="#4f46e5" stroke-width="1.6"/>
+  <text x="58" y="635" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="13" font-weight="600" fill="#0f172a">internal/hotstore</text>
+  <text x="58" y="654" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#64748b">Client / client · 12 — temp+rename 원자 쓰기 · ProjectKey · Manifest · Plane</text>
+  <text x="904" y="635" text-anchor="end" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" font-weight="600" fill="#4f46e5">Clock 단일 선언처</text>
+
+  <line x1="700" y1="666" x2="700" y2="704" stroke="#94a3b8" stroke-width="1.6" marker-end="url(#arrow)"/>
+
+  <!-- L1 / L0 domain and foundation -->
+  <text x="40" y="698" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#64748b">도메인·기반 — 순수 타입, 어휘, 상태기계</text>
+  <rect x="36" y="706" width="211" height="62" rx="10" fill="#ecfdf5" stroke="#059669" stroke-width="1.6"/>
+  <text x="54" y="730" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="13" font-weight="600" fill="#0f172a">episodic</text>
+  <text x="54" y="751" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="10.5" fill="#334155">Record · ValidKind/Actor</text>
+
+  <rect x="261" y="706" width="211" height="62" rx="10" fill="#fef3c7" stroke="#d97706" stroke-width="1.6"/>
+  <text x="279" y="730" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="13" font-weight="600" fill="#0f172a">knowledge</text>
+  <text x="279" y="751" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="10.5" fill="#334155">Node · Edge · Transition</text>
+
+  <rect x="486" y="706" width="211" height="62" rx="10" fill="#f1f5f9" stroke="#475569" stroke-width="1.6"/>
+  <text x="504" y="730" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="13" font-weight="600" fill="#0f172a">ulid</text>
+  <text x="504" y="751" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="10.5" fill="#334155">Client · Valid()</text>
+
+  <rect x="711" y="706" width="211" height="62" rx="10" fill="#f1f5f9" stroke="#475569" stroke-width="1.6"/>
+  <text x="729" y="730" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="13" font-weight="600" fill="#0f172a">config</text>
+  <text x="729" y="751" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11" fill="#334155">env 로딩 · 스펙 상수</text>
+
+  <line x1="700" y1="768" x2="700" y2="806" stroke="#94a3b8" stroke-width="1.6" marker-end="url(#arrow)"/>
+
+  <!-- L0 errs floor -->
+  <rect x="36" y="810" width="888" height="50" rx="10" fill="#fee2e2" stroke="#dc2626" stroke-width="1.6"/>
+  <text x="58" y="833" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="13" font-weight="600" fill="#0f172a">internal/errs</text>
+  <text x="58" y="851" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#64748b">Kind 5종 · *Error · 센티널 5종 · 생성자 8종 — 비교는 언제나 errors.Is</text>
+  <text x="904" y="838" text-anchor="end" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" font-weight="600" fill="#dc2626">internal import 0 · 나머지 14개가 전부 import</text>
+
+  <text x="40" y="882" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#64748b">행 안쪽 의존: episodic → ulid, knowledge → ulid. search·graph·cold 가 hotstore 를 import 하는 이유는 ProjectKey 하나뿐이다.</text>
+
+  <!-- legend -->
+  <rect x="36" y="900" width="14" height="14" rx="4" fill="#eef2ff" stroke="#4f46e5" stroke-width="1.4"/>
+  <text x="56" y="911" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#64748b">hot 정본 · 전송 · 조립</text>
+  <rect x="192" y="900" width="14" height="14" rx="4" fill="#ecfdf5" stroke="#059669" stroke-width="1.4"/>
+  <text x="212" y="911" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#64748b">episodic 평면</text>
+  <rect x="312" y="900" width="14" height="14" rx="4" fill="#fef3c7" stroke="#d97706" stroke-width="1.4"/>
+  <text x="332" y="911" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#64748b">knowledge 평면</text>
+  <rect x="440" y="900" width="14" height="14" rx="4" fill="#f1f5f9" stroke="#475569" stroke-width="1.4"/>
+  <text x="460" y="911" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#64748b">cold · 보조</text>
+  <rect x="540" y="900" width="14" height="14" rx="4" fill="#ffffff" stroke="#94a3b8" stroke-width="1.4"/>
+  <text x="560" y="911" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#64748b">평면 교차 서비스</text>
+  <rect x="668" y="900" width="14" height="14" rx="4" fill="#fee2e2" stroke="#dc2626" stroke-width="1.4"/>
+  <text x="688" y="911" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#64748b">에러 어휘</text>
+  <line x1="762" y1="907" x2="796" y2="907" stroke="#dc2626" stroke-width="2" stroke-dasharray="8 5"/>
+  <text x="804" y="911" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#64748b">에러 타입 경계</text>
+</svg>

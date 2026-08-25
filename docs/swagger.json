@@ -1,0 +1,1781 @@
+{
+    "swagger": "2.0",
+    "info": {
+        "description": "Local personal memory server: episodic (OpenSearch) + knowledge (Neo4j) derived from canonical hot JSON, archived to S3.",
+        "title": "memory-mcp v2 API",
+        "contact": {},
+        "version": "2.0"
+    },
+    "host": "127.0.0.1:8420",
+    "basePath": "/",
+    "paths": {
+        "/healthz": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "ops"
+                ],
+                "summary": "Liveness probe",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/server.Envelope"
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/consolidate": {
+            "post": {
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "ops"
+                ],
+                "summary": "Run the deterministic consolidation pipeline (§4)",
+                "parameters": [
+                    {
+                        "description": "options",
+                        "name": "body",
+                        "in": "body",
+                        "schema": {
+                            "$ref": "#/definitions/server.ConsolidateRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/server.Envelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/consolidate.Report"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/server.Envelope"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/server.Envelope"
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/documents/{sha}": {
+            "get": {
+                "produces": [
+                    "application/octet-stream"
+                ],
+                "tags": [
+                    "documents"
+                ],
+                "summary": "Download original document bytes by sha256",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "sha256",
+                        "name": "sha",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "file"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/server.Envelope"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/server.Envelope"
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/documents/{sha}/chunks": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "documents"
+                ],
+                "summary": "List document_chunk episodes for a document",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "sha256",
+                        "name": "sha",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/server.Envelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "type": "array",
+                                            "items": {
+                                                "$ref": "#/definitions/episodic.Record"
+                                            }
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/server.Envelope"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/server.Envelope"
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/reindex": {
+            "post": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "ops"
+                ],
+                "summary": "Force full rehydration of derived stores (§5)",
+                "parameters": [
+                    {
+                        "type": "boolean",
+                        "description": "full hash audit",
+                        "name": "verify",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/server.Envelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/rehydrate.Report"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/server.Envelope"
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/status": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "ops"
+                ],
+                "summary": "Honest system status: freshness, drift, unconsolidated, S3 sync",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/server.Envelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/server.StatusReport"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/{ws}/{team}/{proj}/documents": {
+            "post": {
+                "consumes": [
+                    "multipart/form-data"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "documents"
+                ],
+                "summary": "Ingest a document (multipart) — blob + chunks + document node",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "workspace",
+                        "name": "ws",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "team",
+                        "name": "team",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "project",
+                        "name": "proj",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "file",
+                        "description": "document file",
+                        "name": "file",
+                        "in": "formData",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/server.Envelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/document.IngestResult"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/server.Envelope"
+                        }
+                    },
+                    "503": {
+                        "description": "document pipeline unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/server.Envelope"
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/{ws}/{team}/{proj}/episodes": {
+            "post": {
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "episodic"
+                ],
+                "summary": "Append an episodic record (hot write + best-effort index)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "workspace",
+                        "name": "ws",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "team",
+                        "name": "team",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "project",
+                        "name": "proj",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "record",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/server.CreateEpisodeRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/server.Envelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/server.CreateEpisodeResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/server.Envelope"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/server.Envelope"
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/{ws}/{team}/{proj}/episodes/search": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "episodic"
+                ],
+                "summary": "Full-text (nori) search over hot episodes",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "workspace",
+                        "name": "ws",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "team",
+                        "name": "team",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "project",
+                        "name": "proj",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "query text",
+                        "name": "q",
+                        "in": "query",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "RFC3339 lower bound",
+                        "name": "from",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "RFC3339 upper bound",
+                        "name": "to",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "comma-separated kinds",
+                        "name": "kinds",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/server.Envelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "type": "array",
+                                            "items": {
+                                                "$ref": "#/definitions/search.Hit"
+                                            }
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/server.Envelope"
+                        }
+                    },
+                    "503": {
+                        "description": "index unavailable (§5)",
+                        "schema": {
+                            "$ref": "#/definitions/server.Envelope"
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/{ws}/{team}/{proj}/episodes/{id}": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "episodic"
+                ],
+                "summary": "Fetch one episode by id (hot first, cold archive fallback)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "workspace",
+                        "name": "ws",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "team",
+                        "name": "team",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "project",
+                        "name": "proj",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "episode ULID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/server.Envelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/episodic.Record"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/server.Envelope"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/server.Envelope"
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/{ws}/{team}/{proj}/knowledge/edges": {
+            "post": {
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "knowledge"
+                ],
+                "summary": "Create a knowledge edge",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "workspace",
+                        "name": "ws",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "team",
+                        "name": "team",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "project",
+                        "name": "proj",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "edge",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/knowledge.Edge"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/server.Envelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/server.EdgeResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/server.Envelope"
+                        }
+                    },
+                    "404": {
+                        "description": "endpoint node not found",
+                        "schema": {
+                            "$ref": "#/definitions/server.Envelope"
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/{ws}/{team}/{proj}/knowledge/graph": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "knowledge"
+                ],
+                "summary": "Neighborhood traversal around an entity",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "workspace",
+                        "name": "ws",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "team",
+                        "name": "team",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "project",
+                        "name": "proj",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "entity name or alias",
+                        "name": "entity",
+                        "in": "query",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "description": "hop depth (default 1, max 10)",
+                        "name": "depth",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/server.Envelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/knowledge.Graph"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/server.Envelope"
+                        }
+                    },
+                    "503": {
+                        "description": "graph unavailable (§5)",
+                        "schema": {
+                            "$ref": "#/definitions/server.Envelope"
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/{ws}/{team}/{proj}/knowledge/nodes": {
+            "post": {
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "knowledge"
+                ],
+                "summary": "Create a knowledge node (optionally superseding others)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "workspace",
+                        "name": "ws",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "team",
+                        "name": "team",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "project",
+                        "name": "proj",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "node",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/server.CreateNodeRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/server.Envelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/server.NodeResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/server.Envelope"
+                        }
+                    },
+                    "404": {
+                        "description": "superseded node not found",
+                        "schema": {
+                            "$ref": "#/definitions/server.Envelope"
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/{ws}/{team}/{proj}/knowledge/nodes/{id}": {
+            "delete": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "knowledge"
+                ],
+                "summary": "Purge a node from hot (S3 versioning is the backstop)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "workspace",
+                        "name": "ws",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "team",
+                        "name": "team",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "project",
+                        "name": "proj",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "node ULID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "must be true (§3)",
+                        "name": "confirm",
+                        "in": "query",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/server.Envelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/server.PurgeNodeResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "confirm missing",
+                        "schema": {
+                            "$ref": "#/definitions/server.Envelope"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/server.Envelope"
+                        }
+                    },
+                    "409": {
+                        "description": "node is still active — archive or deprecate it first (§3)",
+                        "schema": {
+                            "$ref": "#/definitions/server.Envelope"
+                        }
+                    }
+                }
+            },
+            "patch": {
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "knowledge"
+                ],
+                "summary": "Transition node state (set_state / deprecate)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "workspace",
+                        "name": "ws",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "team",
+                        "name": "team",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "project",
+                        "name": "proj",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "node ULID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "operation",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/server.PatchNodeRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/server.Envelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/server.NodeResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/server.Envelope"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/server.Envelope"
+                        }
+                    },
+                    "409": {
+                        "description": "illegal state transition",
+                        "schema": {
+                            "$ref": "#/definitions/server.Envelope"
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/{ws}/{team}/{proj}/knowledge/search": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "knowledge"
+                ],
+                "summary": "Full-text search over knowledge nodes",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "workspace",
+                        "name": "ws",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "team",
+                        "name": "team",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "project",
+                        "name": "proj",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "query text",
+                        "name": "q",
+                        "in": "query",
+                        "required": true
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "opt-in archived/deprecated (§7)",
+                        "name": "include_archived",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/server.Envelope"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "type": "array",
+                                            "items": {
+                                                "$ref": "#/definitions/knowledge.Node"
+                                            }
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/server.Envelope"
+                        }
+                    },
+                    "503": {
+                        "description": "graph unavailable (§5)",
+                        "schema": {
+                            "$ref": "#/definitions/server.Envelope"
+                        }
+                    }
+                }
+            }
+        }
+    },
+    "definitions": {
+        "apierr.Error": {
+            "type": "object",
+            "properties": {
+                "code": {
+                    "type": "string"
+                },
+                "details": {
+                    "type": "object",
+                    "additionalProperties": {}
+                },
+                "message": {
+                    "type": "string"
+                }
+            }
+        },
+        "consolidate.Candidate": {
+            "type": "object",
+            "properties": {
+                "entities": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "episode_ids": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "from": {
+                    "type": "string"
+                },
+                "project": {
+                    "description": "ws/team/proj",
+                    "type": "string"
+                },
+                "to": {
+                    "type": "string"
+                }
+            }
+        },
+        "consolidate.EntityStat": {
+            "type": "object",
+            "properties": {
+                "co_occurrence": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "integer"
+                    }
+                },
+                "count": {
+                    "type": "integer"
+                },
+                "entity": {
+                    "type": "string"
+                }
+            }
+        },
+        "consolidate.Report": {
+            "type": "object",
+            "properties": {
+                "archive_keys": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "candidates": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/consolidate.Candidate"
+                    }
+                },
+                "entities": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/consolidate.EntityStat"
+                    }
+                },
+                "failures": {
+                    "description": "Failures lists per-step errors; a failure never blocks other steps.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "moved_episodes": {
+                    "description": "MovedEpisodes counts records shifted to cold; ArchiveKeys lists the\n{yyyy-mm}.json objects written.",
+                    "type": "integer"
+                },
+                "snapshot_keys": {
+                    "description": "SnapshotKeys lists knowledge latest+snapshot objects written.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "document.IngestResult": {
+            "type": "object",
+            "properties": {
+                "blob_key": {
+                    "description": "BlobKey is the S3 key the original was uploaded to (cold-first).",
+                    "type": "string"
+                },
+                "chunk_ids": {
+                    "description": "ChunkIDs are the created document_chunk episode ids, in sequence order.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "degraded": {
+                    "description": "Degraded names every derived plane whose best-effort mirror failed. The\nhot write succeeded regardless (§1), so an ingest that could not index\nits chunks or MERGE its document node still reports 201 — but it says so\nhere rather than claiming a mirror that does not exist (§0 principle 3).",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "extractable": {
+                    "description": "Extractable is false when no deterministic text layer exists (e.g.\nscanned PDF); the agent handles such documents itself.",
+                    "type": "boolean"
+                },
+                "node_id": {
+                    "description": "NodeID is the auto-created knowledge document node id.",
+                    "type": "string"
+                },
+                "sha": {
+                    "description": "SHA is the lowercase hex sha256 of the original bytes.",
+                    "type": "string"
+                },
+                "truncated": {
+                    "description": "Truncated is non-nil when the chunk cap cut the tail.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/document.Truncation"
+                        }
+                    ]
+                }
+            }
+        },
+        "document.Truncation": {
+            "type": "object",
+            "properties": {
+                "indexed": {
+                    "type": "integer"
+                },
+                "total": {
+                    "type": "integer"
+                }
+            }
+        },
+        "episodic.Actor": {
+            "type": "string",
+            "enum": [
+                "agent",
+                "user",
+                "system"
+            ],
+            "x-enum-varnames": [
+                "ActorAgent",
+                "ActorUser",
+                "ActorSystem"
+            ]
+        },
+        "episodic.Kind": {
+            "type": "string",
+            "enum": [
+                "event",
+                "conversation",
+                "decision",
+                "observation",
+                "document_chunk"
+            ],
+            "x-enum-varnames": [
+                "KindEvent",
+                "KindConversation",
+                "KindDecision",
+                "KindObservation",
+                "KindDocumentChunk"
+            ]
+        },
+        "episodic.Record": {
+            "type": "object",
+            "properties": {
+                "actor": {
+                    "description": "Actor is agent|user|system.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/episodic.Actor"
+                        }
+                    ]
+                },
+                "consolidated": {
+                    "description": "Consolidated marks the record as distilled into knowledge; a\nprecondition for cold archival (§3). Never inferred by the server: it is\nset only where the agent states the distillation itself, by naming this\nrecord in the provenance of a POST .../knowledge/nodes (§3, §0\nprinciple 2).",
+                    "type": "boolean"
+                },
+                "entities": {
+                    "description": "Entities are normalized entity names mentioned by this record.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "id": {
+                    "description": "ID is a ULID; immutable forever (provenance anchor).",
+                    "type": "string"
+                },
+                "kind": {
+                    "description": "Kind is one of the values accepted by ValidKind.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/episodic.Kind"
+                        }
+                    ]
+                },
+                "last_recalled": {
+                    "type": "string"
+                },
+                "occurred_at": {
+                    "description": "OccurredAt is the event time (drives TTL aging, §3.1).",
+                    "type": "string"
+                },
+                "recall_count": {
+                    "description": "RecallCount / LastRecalled track search hits. LastRecalled is RFC3339\nor \"\" when never recalled.",
+                    "type": "integer"
+                },
+                "refs": {
+                    "description": "Refs is set only for kind=document_chunk.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/episodic.Refs"
+                        }
+                    ]
+                },
+                "text": {
+                    "description": "Text is the body — the nori full-text indexing target.",
+                    "type": "string"
+                }
+            }
+        },
+        "episodic.Refs": {
+            "type": "object",
+            "properties": {
+                "chunk_seq": {
+                    "type": "integer"
+                },
+                "doc_sha": {
+                    "type": "string"
+                }
+            }
+        },
+        "knowledge.Edge": {
+            "type": "object",
+            "properties": {
+                "confidence": {
+                    "type": "number"
+                },
+                "from": {
+                    "type": "string"
+                },
+                "provenance": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "rel": {
+                    "$ref": "#/definitions/knowledge.Rel"
+                },
+                "to": {
+                    "type": "string"
+                }
+            }
+        },
+        "knowledge.Graph": {
+            "type": "object",
+            "properties": {
+                "edges": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/knowledge.Edge"
+                    }
+                },
+                "nodes": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/knowledge.Node"
+                    }
+                }
+            }
+        },
+        "knowledge.Node": {
+            "type": "object",
+            "properties": {
+                "aliases": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "body": {
+                    "type": "string"
+                },
+                "created": {
+                    "description": "Created/Updated marshal as RFC3339 and are stored UTC by the writers.",
+                    "type": "string"
+                },
+                "id": {
+                    "description": "ID is a ULID; immutable.",
+                    "type": "string"
+                },
+                "kind": {
+                    "$ref": "#/definitions/knowledge.NodeKind"
+                },
+                "name": {
+                    "description": "Name is the headline; Body the prose statement.",
+                    "type": "string"
+                },
+                "provenance": {
+                    "description": "Provenance lists originating episode ids; links stay valid after the\nepisodes sink to cold because episode ids are immutable (§2).",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "review_after": {
+                    "description": "ReviewAfter is RFC3339 or \"\" when no review is scheduled.",
+                    "type": "string"
+                },
+                "state": {
+                    "$ref": "#/definitions/knowledge.State"
+                },
+                "superseded_by": {
+                    "type": "string"
+                },
+                "supersedes": {
+                    "description": "Supersedes lists node ids this node replaced; SupersededBy is the\nreplacing node id or \"\" while active.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "trust": {
+                    "$ref": "#/definitions/knowledge.Trust"
+                },
+                "updated": {
+                    "type": "string"
+                }
+            }
+        },
+        "knowledge.NodeKind": {
+            "type": "string",
+            "enum": [
+                "entity",
+                "fact",
+                "lesson",
+                "preference",
+                "document"
+            ],
+            "x-enum-varnames": [
+                "KindEntity",
+                "KindFact",
+                "KindLesson",
+                "KindPreference",
+                "KindDocument"
+            ]
+        },
+        "knowledge.Rel": {
+            "type": "string",
+            "enum": [
+                "relates_to",
+                "derived_from",
+                "supersedes",
+                "about"
+            ],
+            "x-enum-varnames": [
+                "RelRelatesTo",
+                "RelDerivedFrom",
+                "RelSupersedes",
+                "RelAbout"
+            ]
+        },
+        "knowledge.State": {
+            "type": "string",
+            "enum": [
+                "active",
+                "archived",
+                "deprecated"
+            ],
+            "x-enum-varnames": [
+                "StateActive",
+                "StateArchived",
+                "StateDeprecated"
+            ]
+        },
+        "knowledge.Trust": {
+            "type": "string",
+            "enum": [
+                "user-stated",
+                "agent-inferred",
+                "imported"
+            ],
+            "x-enum-varnames": [
+                "TrustUserStated",
+                "TrustAgentInferred",
+                "TrustImported"
+            ]
+        },
+        "rehydrate.Drift": {
+            "type": "object",
+            "properties": {
+                "detected": {
+                    "description": "Detected is true when counts/hashes disagree or the index is absent.",
+                    "type": "boolean"
+                },
+                "reason": {
+                    "description": "Reason is a human-readable explanation for /status honesty.",
+                    "type": "string"
+                },
+                "unavailable": {
+                    "description": "Unavailable is true when the store cannot even be reached; writes then\nproceed hot-only in degraded mode (§5).",
+                    "type": "boolean"
+                }
+            }
+        },
+        "rehydrate.DriftReport": {
+            "type": "object",
+            "properties": {
+                "episodic": {
+                    "$ref": "#/definitions/rehydrate.Drift"
+                },
+                "knowledge": {
+                    "$ref": "#/definitions/rehydrate.Drift"
+                }
+            }
+        },
+        "rehydrate.Report": {
+            "type": "object",
+            "properties": {
+                "edges_upserted": {
+                    "type": "integer"
+                },
+                "episodes_indexed": {
+                    "description": "EpisodesIndexed / NodesUpserted / EdgesUpserted count replayed items.",
+                    "type": "integer"
+                },
+                "failures": {
+                    "description": "Failures lists per-project errors; partial success is reported, not\nhidden.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "nodes_upserted": {
+                    "type": "integer"
+                },
+                "verified": {
+                    "description": "Verified is set when verify=true ran a full hash audit (§5 reindex).",
+                    "type": "boolean"
+                }
+            }
+        },
+        "search.Hit": {
+            "type": "object",
+            "properties": {
+                "excerpt": {
+                    "description": "Excerpt is a highlighted fragment of Text, not the full body.",
+                    "type": "string"
+                },
+                "record": {
+                    "$ref": "#/definitions/episodic.Record"
+                },
+                "score": {
+                    "type": "number"
+                }
+            }
+        },
+        "server.ConsolidateRequest": {
+            "type": "object",
+            "properties": {
+                "dry_run": {
+                    "type": "boolean"
+                },
+                "projects": {
+                    "description": "Projects limits the run to \"ws/team/proj\" strings; empty = all.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "server.CreateEpisodeRequest": {
+            "type": "object",
+            "properties": {
+                "actor": {
+                    "$ref": "#/definitions/episodic.Actor"
+                },
+                "entities": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "kind": {
+                    "$ref": "#/definitions/episodic.Kind"
+                },
+                "occurred_at": {
+                    "type": "string"
+                },
+                "refs": {
+                    "$ref": "#/definitions/episodic.Refs"
+                },
+                "text": {
+                    "type": "string"
+                }
+            }
+        },
+        "server.CreateEpisodeResponse": {
+            "type": "object",
+            "properties": {
+                "degraded": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "record": {
+                    "$ref": "#/definitions/episodic.Record"
+                }
+            }
+        },
+        "server.CreateNodeRequest": {
+            "type": "object",
+            "properties": {
+                "aliases": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "body": {
+                    "type": "string"
+                },
+                "kind": {
+                    "$ref": "#/definitions/knowledge.NodeKind"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "provenance": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "review_after": {
+                    "type": "string"
+                },
+                "supersedes": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "trust": {
+                    "$ref": "#/definitions/knowledge.Trust"
+                }
+            }
+        },
+        "server.EdgeResponse": {
+            "type": "object",
+            "properties": {
+                "degraded": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "edge": {
+                    "$ref": "#/definitions/knowledge.Edge"
+                }
+            }
+        },
+        "server.Envelope": {
+            "type": "object",
+            "properties": {
+                "data": {},
+                "error": {
+                    "$ref": "#/definitions/apierr.Error"
+                },
+                "success": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "server.NodeResponse": {
+            "type": "object",
+            "properties": {
+                "degraded": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "node": {
+                    "$ref": "#/definitions/knowledge.Node"
+                }
+            }
+        },
+        "server.PatchNodeRequest": {
+            "type": "object",
+            "properties": {
+                "op": {
+                    "type": "string"
+                },
+                "reason": {
+                    "type": "string"
+                },
+                "state": {
+                    "$ref": "#/definitions/knowledge.State"
+                }
+            }
+        },
+        "server.PurgeNodeResponse": {
+            "type": "object",
+            "properties": {
+                "degraded": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "purged_id": {
+                    "type": "string"
+                },
+                "removed_edges": {
+                    "type": "integer"
+                }
+            }
+        },
+        "server.S3SyncStatus": {
+            "type": "object",
+            "properties": {
+                "bucket": {
+                    "type": "string"
+                },
+                "last_archive_at": {
+                    "type": "string"
+                },
+                "last_snapshot_at": {
+                    "type": "string"
+                },
+                "reachable": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "server.StatusReport": {
+            "type": "object",
+            "properties": {
+                "degraded": {
+                    "description": "Degraded lists currently unavailable derived services.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "dirty_files": {
+                    "description": "DirtyFiles lists hot files whose derived upsert failed and awaits\nrehydration.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "drift": {
+                    "description": "Drift is the live manifest-vs-derived comparison.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/rehydrate.DriftReport"
+                        }
+                    ]
+                },
+                "manifest_updated_at": {
+                    "description": "ManifestUpdatedAt is the manifest's own freshness timestamp.",
+                    "type": "string"
+                },
+                "s3": {
+                    "description": "S3 reports cold-store reachability and last successful archive/snapshot\nactivity.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/server.S3SyncStatus"
+                        }
+                    ]
+                },
+                "stale_unconsolidated": {
+                    "type": "integer"
+                },
+                "unconsolidated": {
+                    "description": "Unconsolidated counts episodes not yet distilled; StaleUnconsolidated\ncounts those older than the TTL that still refuse to age (§3.1 —\nsurfaced forever, never auto-deleted).",
+                    "type": "integer"
+                }
+            }
+        }
+    }
+}

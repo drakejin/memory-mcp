@@ -1,0 +1,1186 @@
+basePath: /
+definitions:
+  apierr.Error:
+    properties:
+      code:
+        type: string
+      details:
+        additionalProperties: {}
+        type: object
+      message:
+        type: string
+    type: object
+  consolidate.Candidate:
+    properties:
+      entities:
+        items:
+          type: string
+        type: array
+      episode_ids:
+        items:
+          type: string
+        type: array
+      from:
+        type: string
+      project:
+        description: ws/team/proj
+        type: string
+      to:
+        type: string
+    type: object
+  consolidate.EntityStat:
+    properties:
+      co_occurrence:
+        additionalProperties:
+          type: integer
+        type: object
+      count:
+        type: integer
+      entity:
+        type: string
+    type: object
+  consolidate.Report:
+    properties:
+      archive_keys:
+        items:
+          type: string
+        type: array
+      candidates:
+        items:
+          $ref: '#/definitions/consolidate.Candidate'
+        type: array
+      entities:
+        items:
+          $ref: '#/definitions/consolidate.EntityStat'
+        type: array
+      failures:
+        description: Failures lists per-step errors; a failure never blocks other
+          steps.
+        items:
+          type: string
+        type: array
+      moved_episodes:
+        description: |-
+          MovedEpisodes counts records shifted to cold; ArchiveKeys lists the
+          {yyyy-mm}.json objects written.
+        type: integer
+      snapshot_keys:
+        description: SnapshotKeys lists knowledge latest+snapshot objects written.
+        items:
+          type: string
+        type: array
+    type: object
+  document.IngestResult:
+    properties:
+      blob_key:
+        description: BlobKey is the S3 key the original was uploaded to (cold-first).
+        type: string
+      chunk_ids:
+        description: ChunkIDs are the created document_chunk episode ids, in sequence
+          order.
+        items:
+          type: string
+        type: array
+      degraded:
+        description: |-
+          Degraded names every derived plane whose best-effort mirror failed. The
+          hot write succeeded regardless (§1), so an ingest that could not index
+          its chunks or MERGE its document node still reports 201 — but it says so
+          here rather than claiming a mirror that does not exist (§0 principle 3).
+        items:
+          type: string
+        type: array
+      extractable:
+        description: |-
+          Extractable is false when no deterministic text layer exists (e.g.
+          scanned PDF); the agent handles such documents itself.
+        type: boolean
+      node_id:
+        description: NodeID is the auto-created knowledge document node id.
+        type: string
+      sha:
+        description: SHA is the lowercase hex sha256 of the original bytes.
+        type: string
+      truncated:
+        allOf:
+        - $ref: '#/definitions/document.Truncation'
+        description: Truncated is non-nil when the chunk cap cut the tail.
+    type: object
+  document.Truncation:
+    properties:
+      indexed:
+        type: integer
+      total:
+        type: integer
+    type: object
+  episodic.Actor:
+    enum:
+    - agent
+    - user
+    - system
+    type: string
+    x-enum-varnames:
+    - ActorAgent
+    - ActorUser
+    - ActorSystem
+  episodic.Kind:
+    enum:
+    - event
+    - conversation
+    - decision
+    - observation
+    - document_chunk
+    type: string
+    x-enum-varnames:
+    - KindEvent
+    - KindConversation
+    - KindDecision
+    - KindObservation
+    - KindDocumentChunk
+  episodic.Record:
+    properties:
+      actor:
+        allOf:
+        - $ref: '#/definitions/episodic.Actor'
+        description: Actor is agent|user|system.
+      consolidated:
+        description: |-
+          Consolidated marks the record as distilled into knowledge; a
+          precondition for cold archival (§3). Never inferred by the server: it is
+          set only where the agent states the distillation itself, by naming this
+          record in the provenance of a POST .../knowledge/nodes (§3, §0
+          principle 2).
+        type: boolean
+      entities:
+        description: Entities are normalized entity names mentioned by this record.
+        items:
+          type: string
+        type: array
+      id:
+        description: ID is a ULID; immutable forever (provenance anchor).
+        type: string
+      kind:
+        allOf:
+        - $ref: '#/definitions/episodic.Kind'
+        description: Kind is one of the values accepted by ValidKind.
+      last_recalled:
+        type: string
+      occurred_at:
+        description: OccurredAt is the event time (drives TTL aging, §3.1).
+        type: string
+      recall_count:
+        description: |-
+          RecallCount / LastRecalled track search hits. LastRecalled is RFC3339
+          or "" when never recalled.
+        type: integer
+      refs:
+        allOf:
+        - $ref: '#/definitions/episodic.Refs'
+        description: Refs is set only for kind=document_chunk.
+      text:
+        description: Text is the body — the nori full-text indexing target.
+        type: string
+    type: object
+  episodic.Refs:
+    properties:
+      chunk_seq:
+        type: integer
+      doc_sha:
+        type: string
+    type: object
+  knowledge.Edge:
+    properties:
+      confidence:
+        type: number
+      from:
+        type: string
+      provenance:
+        items:
+          type: string
+        type: array
+      rel:
+        $ref: '#/definitions/knowledge.Rel'
+      to:
+        type: string
+    type: object
+  knowledge.Graph:
+    properties:
+      edges:
+        items:
+          $ref: '#/definitions/knowledge.Edge'
+        type: array
+      nodes:
+        items:
+          $ref: '#/definitions/knowledge.Node'
+        type: array
+    type: object
+  knowledge.Node:
+    properties:
+      aliases:
+        items:
+          type: string
+        type: array
+      body:
+        type: string
+      created:
+        description: Created/Updated marshal as RFC3339 and are stored UTC by the
+          writers.
+        type: string
+      id:
+        description: ID is a ULID; immutable.
+        type: string
+      kind:
+        $ref: '#/definitions/knowledge.NodeKind'
+      name:
+        description: Name is the headline; Body the prose statement.
+        type: string
+      provenance:
+        description: |-
+          Provenance lists originating episode ids; links stay valid after the
+          episodes sink to cold because episode ids are immutable (§2).
+        items:
+          type: string
+        type: array
+      review_after:
+        description: ReviewAfter is RFC3339 or "" when no review is scheduled.
+        type: string
+      state:
+        $ref: '#/definitions/knowledge.State'
+      superseded_by:
+        type: string
+      supersedes:
+        description: |-
+          Supersedes lists node ids this node replaced; SupersededBy is the
+          replacing node id or "" while active.
+        items:
+          type: string
+        type: array
+      trust:
+        $ref: '#/definitions/knowledge.Trust'
+      updated:
+        type: string
+    type: object
+  knowledge.NodeKind:
+    enum:
+    - entity
+    - fact
+    - lesson
+    - preference
+    - document
+    type: string
+    x-enum-varnames:
+    - KindEntity
+    - KindFact
+    - KindLesson
+    - KindPreference
+    - KindDocument
+  knowledge.Rel:
+    enum:
+    - relates_to
+    - derived_from
+    - supersedes
+    - about
+    type: string
+    x-enum-varnames:
+    - RelRelatesTo
+    - RelDerivedFrom
+    - RelSupersedes
+    - RelAbout
+  knowledge.State:
+    enum:
+    - active
+    - archived
+    - deprecated
+    type: string
+    x-enum-varnames:
+    - StateActive
+    - StateArchived
+    - StateDeprecated
+  knowledge.Trust:
+    enum:
+    - user-stated
+    - agent-inferred
+    - imported
+    type: string
+    x-enum-varnames:
+    - TrustUserStated
+    - TrustAgentInferred
+    - TrustImported
+  rehydrate.Drift:
+    properties:
+      detected:
+        description: Detected is true when counts/hashes disagree or the index is
+          absent.
+        type: boolean
+      reason:
+        description: Reason is a human-readable explanation for /status honesty.
+        type: string
+      unavailable:
+        description: |-
+          Unavailable is true when the store cannot even be reached; writes then
+          proceed hot-only in degraded mode (§5).
+        type: boolean
+    type: object
+  rehydrate.DriftReport:
+    properties:
+      episodic:
+        $ref: '#/definitions/rehydrate.Drift'
+      knowledge:
+        $ref: '#/definitions/rehydrate.Drift'
+    type: object
+  rehydrate.Report:
+    properties:
+      edges_upserted:
+        type: integer
+      episodes_indexed:
+        description: EpisodesIndexed / NodesUpserted / EdgesUpserted count replayed
+          items.
+        type: integer
+      failures:
+        description: |-
+          Failures lists per-project errors; partial success is reported, not
+          hidden.
+        items:
+          type: string
+        type: array
+      nodes_upserted:
+        type: integer
+      verified:
+        description: Verified is set when verify=true ran a full hash audit (§5 reindex).
+        type: boolean
+    type: object
+  search.Hit:
+    properties:
+      excerpt:
+        description: Excerpt is a highlighted fragment of Text, not the full body.
+        type: string
+      record:
+        $ref: '#/definitions/episodic.Record'
+      score:
+        type: number
+    type: object
+  server.ConsolidateRequest:
+    properties:
+      dry_run:
+        type: boolean
+      projects:
+        description: Projects limits the run to "ws/team/proj" strings; empty = all.
+        items:
+          type: string
+        type: array
+    type: object
+  server.CreateEpisodeRequest:
+    properties:
+      actor:
+        $ref: '#/definitions/episodic.Actor'
+      entities:
+        items:
+          type: string
+        type: array
+      kind:
+        $ref: '#/definitions/episodic.Kind'
+      occurred_at:
+        type: string
+      refs:
+        $ref: '#/definitions/episodic.Refs'
+      text:
+        type: string
+    type: object
+  server.CreateEpisodeResponse:
+    properties:
+      degraded:
+        items:
+          type: string
+        type: array
+      record:
+        $ref: '#/definitions/episodic.Record'
+    type: object
+  server.CreateNodeRequest:
+    properties:
+      aliases:
+        items:
+          type: string
+        type: array
+      body:
+        type: string
+      kind:
+        $ref: '#/definitions/knowledge.NodeKind'
+      name:
+        type: string
+      provenance:
+        items:
+          type: string
+        type: array
+      review_after:
+        type: string
+      supersedes:
+        items:
+          type: string
+        type: array
+      trust:
+        $ref: '#/definitions/knowledge.Trust'
+    type: object
+  server.EdgeResponse:
+    properties:
+      degraded:
+        items:
+          type: string
+        type: array
+      edge:
+        $ref: '#/definitions/knowledge.Edge'
+    type: object
+  server.Envelope:
+    properties:
+      data: {}
+      error:
+        $ref: '#/definitions/apierr.Error'
+      success:
+        type: boolean
+    type: object
+  server.NodeResponse:
+    properties:
+      degraded:
+        items:
+          type: string
+        type: array
+      node:
+        $ref: '#/definitions/knowledge.Node'
+    type: object
+  server.PatchNodeRequest:
+    properties:
+      op:
+        type: string
+      reason:
+        type: string
+      state:
+        $ref: '#/definitions/knowledge.State'
+    type: object
+  server.PurgeNodeResponse:
+    properties:
+      degraded:
+        items:
+          type: string
+        type: array
+      purged_id:
+        type: string
+      removed_edges:
+        type: integer
+    type: object
+  server.S3SyncStatus:
+    properties:
+      bucket:
+        type: string
+      last_archive_at:
+        type: string
+      last_snapshot_at:
+        type: string
+      reachable:
+        type: boolean
+    type: object
+  server.StatusReport:
+    properties:
+      degraded:
+        description: Degraded lists currently unavailable derived services.
+        items:
+          type: string
+        type: array
+      dirty_files:
+        description: |-
+          DirtyFiles lists hot files whose derived upsert failed and awaits
+          rehydration.
+        items:
+          type: string
+        type: array
+      drift:
+        allOf:
+        - $ref: '#/definitions/rehydrate.DriftReport'
+        description: Drift is the live manifest-vs-derived comparison.
+      manifest_updated_at:
+        description: ManifestUpdatedAt is the manifest's own freshness timestamp.
+        type: string
+      s3:
+        allOf:
+        - $ref: '#/definitions/server.S3SyncStatus'
+        description: |-
+          S3 reports cold-store reachability and last successful archive/snapshot
+          activity.
+      stale_unconsolidated:
+        type: integer
+      unconsolidated:
+        description: |-
+          Unconsolidated counts episodes not yet distilled; StaleUnconsolidated
+          counts those older than the TTL that still refuse to age (§3.1 —
+          surfaced forever, never auto-deleted).
+        type: integer
+    type: object
+host: 127.0.0.1:8420
+info:
+  contact: {}
+  description: 'Local personal memory server: episodic (OpenSearch) + knowledge (Neo4j)
+    derived from canonical hot JSON, archived to S3.'
+  title: memory-mcp v2 API
+  version: "2.0"
+paths:
+  /healthz:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/server.Envelope'
+      summary: Liveness probe
+      tags:
+      - ops
+  /v1/{ws}/{team}/{proj}/documents:
+    post:
+      consumes:
+      - multipart/form-data
+      parameters:
+      - description: workspace
+        in: path
+        name: ws
+        required: true
+        type: string
+      - description: team
+        in: path
+        name: team
+        required: true
+        type: string
+      - description: project
+        in: path
+        name: proj
+        required: true
+        type: string
+      - description: document file
+        in: formData
+        name: file
+        required: true
+        type: file
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            allOf:
+            - $ref: '#/definitions/server.Envelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/document.IngestResult'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.Envelope'
+        "503":
+          description: document pipeline unavailable
+          schema:
+            $ref: '#/definitions/server.Envelope'
+      summary: Ingest a document (multipart) — blob + chunks + document node
+      tags:
+      - documents
+  /v1/{ws}/{team}/{proj}/episodes:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: workspace
+        in: path
+        name: ws
+        required: true
+        type: string
+      - description: team
+        in: path
+        name: team
+        required: true
+        type: string
+      - description: project
+        in: path
+        name: proj
+        required: true
+        type: string
+      - description: record
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/server.CreateEpisodeRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            allOf:
+            - $ref: '#/definitions/server.Envelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/server.CreateEpisodeResponse'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.Envelope'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.Envelope'
+      summary: Append an episodic record (hot write + best-effort index)
+      tags:
+      - episodic
+  /v1/{ws}/{team}/{proj}/episodes/{id}:
+    get:
+      parameters:
+      - description: workspace
+        in: path
+        name: ws
+        required: true
+        type: string
+      - description: team
+        in: path
+        name: team
+        required: true
+        type: string
+      - description: project
+        in: path
+        name: proj
+        required: true
+        type: string
+      - description: episode ULID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/server.Envelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/episodic.Record'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.Envelope'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/server.Envelope'
+      summary: Fetch one episode by id (hot first, cold archive fallback)
+      tags:
+      - episodic
+  /v1/{ws}/{team}/{proj}/episodes/search:
+    get:
+      parameters:
+      - description: workspace
+        in: path
+        name: ws
+        required: true
+        type: string
+      - description: team
+        in: path
+        name: team
+        required: true
+        type: string
+      - description: project
+        in: path
+        name: proj
+        required: true
+        type: string
+      - description: query text
+        in: query
+        name: q
+        required: true
+        type: string
+      - description: RFC3339 lower bound
+        in: query
+        name: from
+        type: string
+      - description: RFC3339 upper bound
+        in: query
+        name: to
+        type: string
+      - description: comma-separated kinds
+        in: query
+        name: kinds
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/server.Envelope'
+            - properties:
+                data:
+                  items:
+                    $ref: '#/definitions/search.Hit'
+                  type: array
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.Envelope'
+        "503":
+          description: index unavailable (§5)
+          schema:
+            $ref: '#/definitions/server.Envelope'
+      summary: Full-text (nori) search over hot episodes
+      tags:
+      - episodic
+  /v1/{ws}/{team}/{proj}/knowledge/edges:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: workspace
+        in: path
+        name: ws
+        required: true
+        type: string
+      - description: team
+        in: path
+        name: team
+        required: true
+        type: string
+      - description: project
+        in: path
+        name: proj
+        required: true
+        type: string
+      - description: edge
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/knowledge.Edge'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            allOf:
+            - $ref: '#/definitions/server.Envelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/server.EdgeResponse'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.Envelope'
+        "404":
+          description: endpoint node not found
+          schema:
+            $ref: '#/definitions/server.Envelope'
+      summary: Create a knowledge edge
+      tags:
+      - knowledge
+  /v1/{ws}/{team}/{proj}/knowledge/graph:
+    get:
+      parameters:
+      - description: workspace
+        in: path
+        name: ws
+        required: true
+        type: string
+      - description: team
+        in: path
+        name: team
+        required: true
+        type: string
+      - description: project
+        in: path
+        name: proj
+        required: true
+        type: string
+      - description: entity name or alias
+        in: query
+        name: entity
+        required: true
+        type: string
+      - description: hop depth (default 1, max 10)
+        in: query
+        name: depth
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/server.Envelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/knowledge.Graph'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.Envelope'
+        "503":
+          description: graph unavailable (§5)
+          schema:
+            $ref: '#/definitions/server.Envelope'
+      summary: Neighborhood traversal around an entity
+      tags:
+      - knowledge
+  /v1/{ws}/{team}/{proj}/knowledge/nodes:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: workspace
+        in: path
+        name: ws
+        required: true
+        type: string
+      - description: team
+        in: path
+        name: team
+        required: true
+        type: string
+      - description: project
+        in: path
+        name: proj
+        required: true
+        type: string
+      - description: node
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/server.CreateNodeRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            allOf:
+            - $ref: '#/definitions/server.Envelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/server.NodeResponse'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.Envelope'
+        "404":
+          description: superseded node not found
+          schema:
+            $ref: '#/definitions/server.Envelope'
+      summary: Create a knowledge node (optionally superseding others)
+      tags:
+      - knowledge
+  /v1/{ws}/{team}/{proj}/knowledge/nodes/{id}:
+    delete:
+      parameters:
+      - description: workspace
+        in: path
+        name: ws
+        required: true
+        type: string
+      - description: team
+        in: path
+        name: team
+        required: true
+        type: string
+      - description: project
+        in: path
+        name: proj
+        required: true
+        type: string
+      - description: node ULID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: must be true (§3)
+        in: query
+        name: confirm
+        required: true
+        type: boolean
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/server.Envelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/server.PurgeNodeResponse'
+              type: object
+        "400":
+          description: confirm missing
+          schema:
+            $ref: '#/definitions/server.Envelope'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/server.Envelope'
+        "409":
+          description: node is still active — archive or deprecate it first (§3)
+          schema:
+            $ref: '#/definitions/server.Envelope'
+      summary: Purge a node from hot (S3 versioning is the backstop)
+      tags:
+      - knowledge
+    patch:
+      consumes:
+      - application/json
+      parameters:
+      - description: workspace
+        in: path
+        name: ws
+        required: true
+        type: string
+      - description: team
+        in: path
+        name: team
+        required: true
+        type: string
+      - description: project
+        in: path
+        name: proj
+        required: true
+        type: string
+      - description: node ULID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: operation
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/server.PatchNodeRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/server.Envelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/server.NodeResponse'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.Envelope'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/server.Envelope'
+        "409":
+          description: illegal state transition
+          schema:
+            $ref: '#/definitions/server.Envelope'
+      summary: Transition node state (set_state / deprecate)
+      tags:
+      - knowledge
+  /v1/{ws}/{team}/{proj}/knowledge/search:
+    get:
+      parameters:
+      - description: workspace
+        in: path
+        name: ws
+        required: true
+        type: string
+      - description: team
+        in: path
+        name: team
+        required: true
+        type: string
+      - description: project
+        in: path
+        name: proj
+        required: true
+        type: string
+      - description: query text
+        in: query
+        name: q
+        required: true
+        type: string
+      - description: opt-in archived/deprecated (§7)
+        in: query
+        name: include_archived
+        type: boolean
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/server.Envelope'
+            - properties:
+                data:
+                  items:
+                    $ref: '#/definitions/knowledge.Node'
+                  type: array
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.Envelope'
+        "503":
+          description: graph unavailable (§5)
+          schema:
+            $ref: '#/definitions/server.Envelope'
+      summary: Full-text search over knowledge nodes
+      tags:
+      - knowledge
+  /v1/consolidate:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: options
+        in: body
+        name: body
+        schema:
+          $ref: '#/definitions/server.ConsolidateRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/server.Envelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/consolidate.Report'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.Envelope'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/server.Envelope'
+      summary: Run the deterministic consolidation pipeline (§4)
+      tags:
+      - ops
+  /v1/documents/{sha}:
+    get:
+      parameters:
+      - description: sha256
+        in: path
+        name: sha
+        required: true
+        type: string
+      produces:
+      - application/octet-stream
+      responses:
+        "200":
+          description: OK
+          schema:
+            type: file
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.Envelope'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/server.Envelope'
+      summary: Download original document bytes by sha256
+      tags:
+      - documents
+  /v1/documents/{sha}/chunks:
+    get:
+      parameters:
+      - description: sha256
+        in: path
+        name: sha
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/server.Envelope'
+            - properties:
+                data:
+                  items:
+                    $ref: '#/definitions/episodic.Record'
+                  type: array
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.Envelope'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/server.Envelope'
+      summary: List document_chunk episodes for a document
+      tags:
+      - documents
+  /v1/reindex:
+    post:
+      parameters:
+      - description: full hash audit
+        in: query
+        name: verify
+        type: boolean
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/server.Envelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/rehydrate.Report'
+              type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/server.Envelope'
+      summary: Force full rehydration of derived stores (§5)
+      tags:
+      - ops
+  /v1/status:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/server.Envelope'
+            - properties:
+                data:
+                  $ref: '#/definitions/server.StatusReport'
+              type: object
+      summary: 'Honest system status: freshness, drift, unconsolidated, S3 sync'
+      tags:
+      - ops
+swagger: "2.0"

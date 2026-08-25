@@ -1,0 +1,94 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 720" width="960" role="img" aria-labelledby="t d">
+  <title id="t">memory-mcp 시스템 맵 — 이중 평면 메모리</title>
+  <desc id="d">MCP 클라이언트가 loopback chi HTTP 서버(127.0.0.1:8420)를 호출하면 서버는 먼저 hot JSON 정본(~/.local/dj-memory)에 원자 쓰기를 하고, 그 다음 파생 인덱스인 OpenSearch(episodic)와 Neo4j(knowledge)에 best-effort로 upsert한다. 파생 컨테이너는 볼륨이 없어 언제든 사라질 수 있으며, 재수화가 hot에서 위로 전량 재구성한다. 그 아래 S3 콜드 아카이브가 에이징된 episode, knowledge 스냅샷, 문서 blob을 보관한다.</desc>
+
+  <defs>
+    <marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L7,3 L0,6 Z" fill="#94a3b8"/>
+    </marker>
+  </defs>
+
+  <rect width="960" height="720" fill="#fbfcfe" rx="14"/>
+
+  <!-- header -->
+  <text x="32" y="38" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#0f172a">memory-mcp — 이중 평면 메모리 시스템 맵</text>
+  <text x="32" y="58" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#64748b">정본은 hot JSON 하나 · 나머지는 전부 파생물</text>
+
+  <!-- legend -->
+  <rect x="556" y="34" width="12" height="12" rx="3" fill="#eef2ff" stroke="#4f46e5" stroke-width="1.6"/>
+  <text x="574" y="44" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#64748b">hot 정본</text>
+  <rect x="646" y="34" width="12" height="12" rx="3" fill="#ecfdf5" stroke="#059669" stroke-width="1.6"/>
+  <text x="664" y="44" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#64748b">episodic</text>
+  <rect x="736" y="34" width="12" height="12" rx="3" fill="#fef3c7" stroke="#d97706" stroke-width="1.6"/>
+  <text x="754" y="44" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#64748b">knowledge</text>
+  <rect x="836" y="34" width="12" height="12" rx="3" fill="#f1f5f9" stroke="#475569" stroke-width="1.6"/>
+  <text x="854" y="44" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#64748b">cold S3</text>
+  <text x="556" y="62" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#64748b">실선 = 정본 쓰기 · 점선 = 파생/비동기</text>
+
+  <!-- client -->
+  <rect x="340" y="78" width="280" height="46" rx="10" fill="#ffffff" stroke="#94a3b8" stroke-width="1.6"/>
+  <text x="480" y="100" text-anchor="middle" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="13" fill="#0f172a">MCP 클라이언트 / 에이전트</text>
+  <text x="480" y="116" text-anchor="middle" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#64748b">HTTP + 봉투 {success, data, error}</text>
+  <path d="M480 124 V 144" stroke="#94a3b8" stroke-width="1.6" fill="none" marker-end="url(#arrow)"/>
+
+  <!-- http server -->
+  <rect x="40" y="148" width="880" height="84" rx="10" fill="#ffffff" stroke="#94a3b8" stroke-width="1.6"/>
+  <text x="60" y="174" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#0f172a">chi HTTP 서버 — 127.0.0.1:8420 (loopback 전용, 인증 없음)</text>
+  <text x="60" y="198" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="13" fill="#0f172a">/v1/{ws}/{team}/{proj}/ — episodes · knowledge · documents</text>
+  <text x="60" y="220" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="13" fill="#0f172a">/v1/status · /v1/consolidate · /v1/reindex · /v1/documents/{sha} · /healthz · /swagger</text>
+
+  <!-- write path to hot -->
+  <path d="M200 232 V 424" stroke="#94a3b8" stroke-width="1.6" fill="none" marker-end="url(#arrow)"/>
+  <text x="214" y="300" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="13" fill="#0f172a">① hot 원자 쓰기</text>
+  <text x="214" y="318" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#64748b">temp+rename · 여기 실패해야 5xx</text>
+
+  <!-- derived upserts -->
+  <text x="720" y="246" text-anchor="middle" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#64748b">② 파생 upsert (best-effort)</text>
+  <path d="M568 232 V 294" stroke="#94a3b8" stroke-width="1.6" stroke-dasharray="5 4" fill="none" marker-end="url(#arrow)"/>
+  <path d="M872 232 V 294" stroke="#94a3b8" stroke-width="1.6" stroke-dasharray="5 4" fill="none" marker-end="url(#arrow)"/>
+
+  <!-- derived plane -->
+  <rect x="520" y="252" width="400" height="136" rx="12" fill="none" stroke="#94a3b8" stroke-width="1.6" stroke-dasharray="5 4"/>
+  <text x="536" y="272" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#64748b">파생 평면 — 볼륨 없는 도커 컨테이너</text>
+
+  <rect x="536" y="286" width="180" height="92" rx="10" fill="#ecfdf5" stroke="#059669" stroke-width="1.6"/>
+  <text x="550" y="308" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="13" font-weight="600" fill="#0f172a">OpenSearch</text>
+  <text x="550" y="328" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#0f172a">episodic 인덱스</text>
+  <text x="550" y="346" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#64748b">nori 한국어 형태소</text>
+  <text x="550" y="364" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#64748b">dj-memory-episodic</text>
+
+  <rect x="732" y="286" width="172" height="92" rx="10" fill="#fef3c7" stroke="#d97706" stroke-width="1.6"/>
+  <text x="746" y="308" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="13" font-weight="600" fill="#0f172a">Neo4j 5</text>
+  <text x="746" y="328" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#0f172a">knowledge 그래프</text>
+  <text x="746" y="346" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#64748b">MERGE 멱등 upsert</text>
+  <text x="746" y="364" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#64748b">:KnowledgeNode</text>
+
+  <!-- rehydration back up -->
+  <path d="M640 428 V 390" stroke="#94a3b8" stroke-width="1.6" stroke-dasharray="5 4" fill="none" marker-end="url(#arrow)"/>
+  <path d="M790 428 V 390" stroke="#94a3b8" stroke-width="1.6" stroke-dasharray="5 4" fill="none" marker-end="url(#arrow)"/>
+  <text x="624" y="412" text-anchor="end" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#64748b">재수화 — manifest 대조 → 전량 재구성</text>
+
+  <!-- hot store -->
+  <rect x="40" y="428" width="880" height="140" rx="10" fill="#eef2ff" stroke="#4f46e5" stroke-width="1.6"/>
+  <text x="60" y="456" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#0f172a">hot — 정본(source of truth) · ~/.local/dj-memory</text>
+  <text x="60" y="486" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="13" fill="#0f172a">episodic/{ws}/{team}/{proj}.json — append 사건 기록</text>
+  <text x="60" y="510" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="13" fill="#0f172a">knowledge/{ws}/{team}/{proj}.json — 노드+엣지 문서</text>
+  <text x="60" y="534" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="13" fill="#0f172a">blobs/{sha256} — 원본 캐시(축출 가능)</text>
+  <text x="500" y="486" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="13" fill="#0f172a">manifest.json — sha256 · record_count · indexed_at · dirty</text>
+  <text x="500" y="510" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="13" fill="#0f172a">indexes: opensearch / neo4j → last_hydrated_sha</text>
+  <text x="500" y="534" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="13" fill="#0f172a">모든 쓰기 temp+rename · 디렉터리 0700 / 파일 0600</text>
+
+  <!-- hot to cold -->
+  <path d="M200 568 V 604" stroke="#94a3b8" stroke-width="1.6" fill="none" marker-end="url(#arrow)"/>
+  <text x="214" y="592" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#64748b">에이징 · 스냅샷 · blob 업로드</text>
+  <path d="M760 604 V 572" stroke="#94a3b8" stroke-width="1.6" stroke-dasharray="5 4" fill="none" marker-end="url(#arrow)"/>
+  <text x="748" y="592" text-anchor="end" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#64748b">cold 조회 · blob 재수화</text>
+
+  <!-- cold store -->
+  <rect x="40" y="608" width="880" height="88" rx="10" fill="#f1f5f9" stroke="#475569" stroke-width="1.6"/>
+  <text x="60" y="636" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="15" font-weight="600" fill="#0f172a">cold — s3://vms-memory-mcp (ap-northeast-2, versioning on)</text>
+  <text x="60" y="660" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#0f172a">{user}/episodic/{ws}/{team}/{proj}/{yyyy-mm}.json</text>
+  <text x="60" y="680" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#0f172a">{user}/blobs/{sha[:2]}/{sha} — ingest 즉시 업로드</text>
+  <text x="500" y="660" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#0f172a">{user}/knowledge/{ws}/{team}/{proj}/latest.json</text>
+  <text x="500" y="680" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" fill="#0f172a">{user}/knowledge/.../snapshots/{ts}.json — 매 consolidate</text>
+</svg>

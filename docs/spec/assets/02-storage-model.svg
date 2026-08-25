@@ -1,0 +1,98 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 696" width="960" role="img" aria-labelledby="t d" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">
+  <title id="t">memory-mcp 저장 모델 — hot 로컬 정본과 S3 cold 아카이브의 키 대응</title>
+  <desc id="d">왼쪽은 DJ_MEMORY_HOME 아래 hot 트리(episodic, knowledge, blobs, manifest.json), 오른쪽은 s3 버킷 username 프리픽스 아래 대응 키(월별 배치, latest와 snapshots, blobs, purge 백스톱). 가운데 화살표는 에이징, 스냅샷, 블랍 업로드, 캐시 미스 복원 방향을 나타낸다.</desc>
+  <rect width="960" height="696" fill="#fbfcfe" rx="14"/>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#94a3b8"/>
+    </marker>
+  </defs>
+
+  <text x="32" y="40" font-size="15" font-weight="600" fill="#0f172a">저장 모델 — hot(정본) · derived(파생) · cold(아카이브)</text>
+  <text x="32" y="60" font-size="11.5" fill="#64748b">hot JSON만이 정본이다. OpenSearch·Neo4j는 재수화 가능한 뷰, S3는 에이징 목적지이자 purge 백스톱.</text>
+
+  <rect x="32" y="76" width="12" height="12" rx="3" fill="#eef2ff" stroke="#4f46e5" stroke-width="1.6"/>
+  <text x="50" y="86" font-size="11.5" fill="#64748b">hot 정본</text>
+  <rect x="140" y="76" width="12" height="12" rx="3" fill="#ecfdf5" stroke="#059669" stroke-width="1.6"/>
+  <text x="158" y="86" font-size="11.5" fill="#64748b">episodic</text>
+  <rect x="250" y="76" width="12" height="12" rx="3" fill="#fef3c7" stroke="#d97706" stroke-width="1.6"/>
+  <text x="268" y="86" font-size="11.5" fill="#64748b">knowledge</text>
+  <rect x="372" y="76" width="12" height="12" rx="3" fill="#f1f5f9" stroke="#475569" stroke-width="1.6"/>
+  <text x="390" y="86" font-size="11.5" fill="#64748b">cold / S3</text>
+  <rect x="470" y="76" width="12" height="12" rx="3" fill="#fee2e2" stroke="#dc2626" stroke-width="1.6"/>
+  <text x="488" y="86" font-size="11.5" fill="#64748b">purge 백스톱</text>
+
+  <rect x="28" y="112" width="396" height="490" rx="10" fill="#eef2ff" stroke="#4f46e5" stroke-width="1.6"/>
+  <text x="48" y="138" font-size="15" font-weight="600" fill="#0f172a">hot — 로컬 정본 (JSON)</text>
+  <text x="48" y="157" font-size="11.5" fill="#64748b">$DJ_MEMORY_HOME · 기본 ~/.local/dj-memory</text>
+
+  <rect x="44" y="174" width="364" height="84" rx="10" fill="#ecfdf5" stroke="#059669" stroke-width="1.6"/>
+  <text x="60" y="198" font-size="13" fill="#0f172a">episodic/{ws}/{team}/{proj}.json</text>
+  <text x="60" y="218" font-size="11.5" fill="#64748b">[]episodic.Record — JSON 배열, append-only</text>
+  <text x="60" y="236" font-size="11.5" fill="#64748b">쓰기마다 전량 재직렬화 (MarshalIndent 2sp)</text>
+
+  <rect x="44" y="270" width="364" height="84" rx="10" fill="#fef3c7" stroke="#d97706" stroke-width="1.6"/>
+  <text x="60" y="294" font-size="13" fill="#0f172a">knowledge/{ws}/{team}/{proj}.json</text>
+  <text x="60" y="314" font-size="11.5" fill="#64748b">knowledge.Graph { nodes[], edges[] } — 영구</text>
+  <text x="60" y="332" font-size="11.5" fill="#64748b">record_count = 노드 수 (엣지 제외)</text>
+
+  <rect x="44" y="366" width="364" height="66" rx="10" fill="#ffffff" stroke="#475569" stroke-width="1.6"/>
+  <text x="60" y="390" font-size="13" fill="#0f172a">blobs/{sha256}</text>
+  <text x="60" y="410" font-size="11.5" fill="#64748b">원본 바이트 로컬 캐시 — 축출 가능(정본 아님)</text>
+
+  <rect x="44" y="444" width="364" height="122" rx="10" fill="#ffffff" stroke="#4f46e5" stroke-width="1.6"/>
+  <text x="60" y="468" font-size="13" font-weight="600" fill="#0f172a">manifest.json</text>
+  <text x="60" y="490" font-size="13" fill="#0f172a">files["episodic/ws/team/proj"]</text>
+  <text x="60" y="508" font-size="11.5" fill="#64748b">= { sha256, record_count, indexed_at, dirty }</text>
+  <text x="60" y="530" font-size="13" fill="#0f172a">indexes["opensearch"] · indexes["neo4j"]</text>
+  <text x="60" y="548" font-size="11.5" fill="#64748b">= { last_hydrated_sha } + updated_at</text>
+
+  <text x="48" y="588" font-size="11.5" fill="#64748b">쓰기 = temp → fsync → chmod 0600 → rename · dir 0700</text>
+
+  <rect x="536" y="112" width="396" height="490" rx="10" fill="#f1f5f9" stroke="#475569" stroke-width="1.6"/>
+  <text x="556" y="138" font-size="15" font-weight="600" fill="#0f172a">cold — S3 아카이브 · 백스톱</text>
+  <text x="556" y="157" font-size="11.5" fill="#64748b">s3://vms-memory-mcp/{username}/ · ap-northeast-2</text>
+  <text x="556" y="173" font-size="11.5" fill="#64748b">profile vms-holdings · bucket versioning on</text>
+
+  <rect x="552" y="190" width="364" height="68" rx="10" fill="#ecfdf5" stroke="#059669" stroke-width="1.6"/>
+  <text x="568" y="214" font-size="13" fill="#0f172a">episodic/{ws}/{team}/{proj}/{yyyy-mm}.json</text>
+  <text x="568" y="234" font-size="11.5" fill="#64748b">월 배치 — id 기준 merge 후 ULID 정렬</text>
+
+  <rect x="552" y="270" width="364" height="84" rx="10" fill="#fef3c7" stroke="#d97706" stroke-width="1.6"/>
+  <text x="568" y="294" font-size="13" fill="#0f172a">knowledge/{ws}/{team}/{proj}/latest.json</text>
+  <text x="568" y="314" font-size="13" fill="#0f172a">knowledge/.../snapshots/{ts}.json</text>
+  <text x="568" y="332" font-size="11.5" fill="#64748b">ts = 20060102T150405Z (UTC) · latest 먼저 put</text>
+
+  <rect x="552" y="366" width="364" height="66" rx="10" fill="#ffffff" stroke="#475569" stroke-width="1.6"/>
+  <text x="568" y="390" font-size="13" fill="#0f172a">blobs/{sha[:2]}/{sha256}</text>
+  <text x="568" y="410" font-size="11.5" fill="#64748b">ingest 즉시 업로드 — 여기가 정본</text>
+
+  <rect x="552" y="444" width="364" height="122" rx="10" fill="#fee2e2" stroke="#dc2626" stroke-width="1.6"/>
+  <text x="568" y="468" font-size="13" font-weight="600" fill="#0f172a">purge 백스톱</text>
+  <text x="568" y="490" font-size="13" fill="#0f172a">DELETE .../knowledge/nodes/{id}</text>
+  <text x="568" y="508" font-size="11.5" fill="#64748b">?confirm=true — hot에서만 제거</text>
+  <text x="568" y="530" font-size="13" fill="#0f172a">복구 = S3 object version</text>
+  <text x="568" y="548" font-size="11.5" fill="#64748b">아카이브·스냅샷 객체도 버전으로 남는다</text>
+
+  <text x="556" y="588" font-size="11.5" fill="#64748b">Put은 덮어쓰기 — 이전 바이트는 버전으로 보존</text>
+
+  <line x1="430" y1="224" x2="530" y2="224" stroke="#94a3b8" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <text x="480" y="210" font-size="11.5" fill="#64748b" text-anchor="middle">① 에이징</text>
+  <text x="480" y="242" font-size="11.5" fill="#64748b" text-anchor="middle">TTL 30d · 압박</text>
+
+  <line x1="430" y1="312" x2="530" y2="312" stroke="#94a3b8" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+  <text x="480" y="298" font-size="11.5" fill="#64748b" text-anchor="middle">② 스냅샷</text>
+  <text x="480" y="330" font-size="11.5" fill="#64748b" text-anchor="middle">매 consolidate</text>
+
+  <line x1="430" y1="400" x2="530" y2="400" stroke="#94a3b8" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <text x="480" y="386" font-size="11.5" fill="#64748b" text-anchor="middle">③ 블랍</text>
+  <text x="480" y="418" font-size="11.5" fill="#64748b" text-anchor="middle">ingest 즉시</text>
+
+  <line x1="530" y1="470" x2="430" y2="470" stroke="#94a3b8" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+  <text x="480" y="456" font-size="11.5" fill="#64748b" text-anchor="middle">④ 복원</text>
+  <text x="480" y="488" font-size="11.5" fill="#64748b" text-anchor="middle">hot 미스 시</text>
+
+  <rect x="28" y="618" width="904" height="56" rx="10" fill="#ffffff" stroke="#94a3b8" stroke-width="1.6"/>
+  <text x="48" y="642" font-size="13" fill="#0f172a">파생물(OpenSearch · Neo4j)은 이 그림에 없다 — 전부 hot JSON에서 재수화되는 뷰다.</text>
+  <text x="48" y="662" font-size="11.5" fill="#64748b">manifest.json이 hot과 파생물 사이 신선도를 잇는 유일한 장부. 에이징 규칙은 03-lifecycle, 재수화는 07-rehydration.</text>
+</svg>
